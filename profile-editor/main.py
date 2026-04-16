@@ -82,7 +82,6 @@ def _init_profile() -> None:
 
 
 def _init_jobs_db() -> None:
-    """Create jobs.db if missing, then add any columns absent from older DBs."""
     JOBS_DB.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(JOBS_DB)
     con.execute("""
@@ -104,15 +103,6 @@ def _init_jobs_db() -> None:
             is_applied INTEGER DEFAULT 0
         )
     """)
-    existing = {row[1] for row in con.execute("PRAGMA table_info(jobs)").fetchall()}
-    for col, ddl in {
-        "user_rating": "INTEGER DEFAULT NULL",
-        "notes":       "TEXT DEFAULT NULL",
-        "hidden":      "INTEGER DEFAULT 0",
-        "is_applied":  "INTEGER DEFAULT 0",
-    }.items():
-        if col not in existing:
-            con.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")
     con.commit()
     con.close()
 
