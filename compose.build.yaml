@@ -1,6 +1,8 @@
 services:
   scraper:
-    image: ghcr.io/abarroso647/job-jigsaw-scraper:latest
+    build:
+      context: .
+      dockerfile: scraper/Dockerfile
     container_name: scraper
     restart: unless-stopped
     volumes:
@@ -11,7 +13,9 @@ services:
       - TZ=America/Toronto
 
   notifier:
-    image: ghcr.io/abarroso647/job-jigsaw-notifier:latest
+    build:
+      context: .
+      dockerfile: notifier/Dockerfile
     container_name: notifier
     restart: unless-stopped
     volumes:
@@ -24,7 +28,9 @@ services:
       - scraper
 
   profile-editor:
-    image: ghcr.io/abarroso647/job-jigsaw-profile-editor:latest
+    build:
+      context: .
+      dockerfile: profile-editor/Dockerfile
     container_name: profile-editor
     restart: unless-stopped
     ports:
