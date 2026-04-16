@@ -345,9 +345,9 @@ def analyse(body: AnalyseRequest) -> AnalyseResponse:
         raise HTTPException(400, "OPENROUTER_API_KEY not set")
 
     prompt = f"""You are a job search assistant. Based on the resume and description below, suggest:
-1. 8-12 job title search terms for job boards
-2. 15-20 boost keywords with weights (1-20, higher = more relevant)
-3. 5-10 penalize keywords with weights (-10 to -50, things that disqualify this candidate)
+1. 8-12 job title search terms to search on job boards (e.g. "Business Development Representative")
+2. 15-20 boost keywords with weights (1-20): things that should appear in a GOOD job listing for this candidate — relevant industries, skills, tools, and role types they excel at
+3. 5-10 penalize keywords with weights (-10 to -50): things that appear in job LISTINGS that would make the role a BAD fit — wrong industry, wrong seniority level, unrelated role types. Do NOT penalize based on anything in the candidate's own resume or background.
 
 Return ONLY valid JSON:
 {{

@@ -346,7 +346,6 @@
 
 <nav>
   <button class="active" onclick="switchTab('resume', this)">Resume</button>
-  <button onclick="switchTab('keywords', this)">Keywords</button>
   <button onclick="switchTab('settings', this)">Settings</button>
   <button onclick="switchTab('preview', this)">Preview</button>
   <button onclick="switchTab('history', this)">History</button>
@@ -422,8 +421,8 @@
     </div>
   </div>
 
-  <!-- ── KEYWORDS TAB ───────────────────────────────────────────── -->
-  <div id="tab-keywords" class="tab">
+  <!-- ── SETTINGS TAB ───────────────────────────────────────────── -->
+  <div id="tab-settings" class="tab">
 
     <div class="card">
       <h2>Score threshold</h2>
@@ -436,39 +435,7 @@
       <p style="font-size:13px;color:#6b7280;margin-top:8px;">
         Jobs at or above this score will be included in the digest.
       </p>
-      <div style="margin-top:16px;display:flex;align-items:center;gap:12px;">
-        <label style="font-size:14px;color:#374151;font-weight:500;margin:0;">Jobs per daily email</label>
-        <input type="number" id="max-jobs" min="1" max="100"
-               style="width:70px;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">
-      </div>
     </div>
-
-    <div class="card">
-      <h2>Boost keywords</h2>
-      <table>
-        <thead><tr><th>Keyword</th><th>Weight</th><th></th></tr></thead>
-        <tbody id="boost-table"></tbody>
-      </table>
-      <button class="btn btn-secondary" style="margin-top:12px" onclick="addBoostRow()">+ Add keyword</button>
-    </div>
-
-    <div class="card">
-      <h2>Penalize keywords</h2>
-      <table>
-        <thead><tr><th>Keyword</th><th>Weight (negative)</th><th></th></tr></thead>
-        <tbody id="penalize-table"></tbody>
-      </table>
-      <button class="btn btn-secondary" style="margin-top:12px" onclick="addPenalizeRow()">+ Add keyword</button>
-    </div>
-
-    <div class="save-bar">
-      <span class="save-status" id="keywords-save-status"></span>
-      <button class="btn btn-primary" onclick="saveKeywords()">Save Keywords</button>
-    </div>
-  </div>
-
-  <!-- ── SETTINGS TAB ───────────────────────────────────────────── -->
-  <div id="tab-settings" class="tab">
 
     <div class="card">
       <h2>Search terms</h2>
@@ -501,6 +468,24 @@
         <input type="checkbox" id="remote-toggle" style="width:auto">
         Include remote Canada roles
       </label>
+    </div>
+
+    <div class="card">
+      <h2>Boost keywords</h2>
+      <table>
+        <thead><tr><th>Keyword</th><th>Weight</th><th></th></tr></thead>
+        <tbody id="boost-table"></tbody>
+      </table>
+      <button class="btn btn-secondary" style="margin-top:12px" onclick="addBoostRow()">+ Add keyword</button>
+    </div>
+
+    <div class="card">
+      <h2>Penalize keywords</h2>
+      <table>
+        <thead><tr><th>Keyword</th><th>Weight (negative)</th><th></th></tr></thead>
+        <tbody id="penalize-table"></tbody>
+      </table>
+      <button class="btn btn-secondary" style="margin-top:12px" onclick="addPenalizeRow()">+ Add keyword</button>
     </div>
 
     <div class="card">
@@ -756,21 +741,17 @@ async function saveResume() {
   profile.description = document.getElementById('description').value;
   await saveProfile('resume-save-status');
 }
-async function saveKeywords() {
+async function saveSettings() {
   if (!profile.scoring) profile.scoring = {};
   profile.scoring.boost    = readTable('boost-table');
   profile.scoring.penalize = readTable('penalize-table');
-  profile.notification = profile.notification || {};
-  profile.notification.score_threshold = parseInt(document.getElementById('threshold').value);
-  await saveProfile('keywords-save-status');
-}
-async function saveSettings() {
   if (!profile.search) profile.search = {};
   profile.search.terms     = readSearchTerms();
   const loc = document.getElementById('location-primary').value.trim();
   profile.search.locations = loc ? [loc, 'Canada'] : ['Toronto, ON', 'Canada'];
   profile.search.remote    = document.getElementById('remote-toggle').checked;
   profile.notification = profile.notification || {};
+  profile.notification.score_threshold    = parseInt(document.getElementById('threshold').value);
   profile.notification.max_jobs_per_email = parseInt(document.getElementById('max-jobs').value);
   const [h, m] = document.getElementById('send-time').value.split(':');
   profile.notification.schedule = `${parseInt(m)} ${parseInt(h)} * * *`;
@@ -831,7 +812,12 @@ async function runAnalyse() {
       analyseData.penalize.map(k =>
         `<label class="keyword-chip"><input type="checkbox" value="${escHtml(k.keyword)}" data-weight="${k.weight}">${escHtml(k.keyword)} <span style="opacity:.6">${k.weight}</span></label>`
       ).join('');
-    document.querySelectorAll('.keyword-chip').forEach(c => c.addEventListener('click', () => c.classList.toggle('selected')));
+    document.querySelectorAll('.keyword-chip').forEach(c => {
+      const input = c.querySelector('input');
+      input.checked = true;
+      c.classList.add('selected');
+      input.addEventListener('change', () => c.classList.toggle('selected', input.checked));
+    });
     document.getElementById('analyse-results').style.display = 'block';
   } catch (e) { alert('Analyse failed: ' + e.message); }
   finally { spinner.style.display = 'none'; }
@@ -852,7 +838,7 @@ async function runResumeTips() {
   finally { spinner.style.display = 'none'; }
 }
 
-function saveSelected() {
+async function saveSelected() {
   const titles   = [...document.querySelectorAll('#title-chips input:checked')].map(i => i.value);
   const boost    = [...document.querySelectorAll('#boost-chips input:checked')].map(i => ({ keyword: i.value, weight: parseInt(i.dataset.weight) }));
   const penalize = [...document.querySelectorAll('#penalize-chips input:checked')].map(i => ({ keyword: i.value, weight: parseInt(i.dataset.weight) }));
@@ -860,7 +846,8 @@ function saveSelected() {
   if (boost.length)    boost.forEach(item => document.getElementById('boost-table').appendChild(makeKeywordRow('boost', item.keyword, item.weight)));
   if (penalize.length) penalize.forEach(item => document.getElementById('penalize-table').appendChild(makeKeywordRow('penalize', item.keyword, item.weight)));
   document.getElementById('analyse-results').style.display = 'none';
-  notice('resume-save-status', '✓ Added — remember to save each tab');
+  await saveSettings();
+  notice('resume-save-status', '✓ Saved');
 }
 
 // ── Scraper status ────────────────────────────────────────────────────────────
