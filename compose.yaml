@@ -1,0 +1,45 @@
+services:
+  scraper:
+    build:
+      context: .
+      dockerfile: scraper/Dockerfile
+    container_name: scraper
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    env_file:
+      - .env
+    environment:
+      - TZ=America/Toronto
+
+  notifier:
+    build:
+      context: .
+      dockerfile: notifier/Dockerfile
+    container_name: notifier
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    env_file:
+      - .env
+    environment:
+      - TZ=America/Toronto
+    depends_on:
+      - scraper
+
+  profile-editor:
+    build:
+      context: .
+      dockerfile: profile-editor/Dockerfile
+    container_name: profile-editor
+    restart: unless-stopped
+    ports:
+      - "3006:3006"
+    volumes:
+      - ./data:/data
+    env_file:
+      - .env
+    environment:
+      - TZ=America/Toronto
+    depends_on:
+      - scraper

@@ -1,0 +1,16 @@
+[project]
+name = "profile-editor"
+version = "0.1.0"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi>=0.115.5",
+    "uvicorn>=0.32.1",
+    "pyyaml>=6.0.2",
+    "requests>=2.32.3",
+    "jinja2>=3.1.4",
+    "python-multipart>=0.0.12",
+    "aiofiles>=24.1.0",
+    "pydantic-settings>=2.6.1",
+    "pymupdf4llm>=0.0.17",
+    "mammoth>=1.6.0",
+]
