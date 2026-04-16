@@ -1,0 +1,1287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Job Jigsaw</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f3f4f6;
+      color: #111827;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1e293b;
+      color: #fff;
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { font-size: 18px; font-weight: 600; }
+
+    nav {
+      background: #fff;
+      border-bottom: 1px solid #e5e7eb;
+      padding: 0 32px;
+      display: flex;
+      gap: 4px;
+    }
+    nav button {
+      background: none;
+      border: none;
+      border-bottom: 3px solid transparent;
+      padding: 14px 16px;
+      font-size: 14px;
+      font-weight: 500;
+      color: #6b7280;
+      cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+    nav button.active { color: #2563eb; border-bottom-color: #2563eb; }
+    nav button:hover:not(.active) { color: #374151; }
+
+    main { max-width: 960px; margin: 32px auto; padding: 0 24px; }
+
+    .tab { display: none; }
+    .tab.active { display: block; }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      border: 1px solid #e5e7eb;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 16px; color: #374151; }
+
+    label { display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px; }
+
+    textarea, input[type=text], input[type=number], input[type=time], select {
+      width: 100%;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 14px;
+      font-family: inherit;
+      color: #111827;
+      background: #fff;
+      outline: none;
+      transition: border-color .15s;
+    }
+    textarea:focus, input:focus, select:focus { border-color: #2563eb; }
+    textarea { resize: vertical; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: opacity .15s;
+    }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-primary   { background: #2563eb; color: #fff; }
+    .btn-secondary { background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; }
+    .btn-success   { background: #16a34a; color: #fff; }
+
+    .row { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+    .row .btn { margin-top: 22px; flex-shrink: 0; }
+
+    /* keyword tables */
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { text-align: left; font-size: 12px; font-weight: 600; color: #6b7280;
+         padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
+    td { padding: 6px 10px; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
+    td input { padding: 4px 8px; font-size: 13px; }
+    td input[type=number] { width: 80px; }
+    .remove-btn {
+      background: none; border: none; color: #9ca3af; cursor: pointer;
+      font-size: 16px; padding: 0 4px;
+    }
+    .remove-btn:hover { color: #dc2626; }
+
+    /* score badge */
+    .score-badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 20px;
+      font-weight: 700;
+      font-size: 13px;
+      color: #fff;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .score-green  { background: #22c55e; }
+    .score-yellow { background: #eab308; }
+    .score-red    { background: #ef4444; }
+
+    /* preview job cards */
+    .job-card {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .job-card .job-title { font-weight: 600; font-size: 16px; margin: 6px 0 4px; }
+    .job-card .job-meta  { font-size: 13px; color: #6b7280; margin-bottom: 10px; }
+    .job-card .job-footer { display: flex; align-items: center; justify-content: space-between;
+                            gap: 8px; flex-wrap: wrap; }
+    .job-card a { font-size: 13px; color: #2563eb; text-decoration: none; font-weight: 500; }
+    .job-card a:hover { text-decoration: underline; }
+
+    /* rating buttons */
+    .rate-btn {
+      background: none; border: 1px solid #d1d5db; border-radius: 6px;
+      padding: 4px 10px; font-size: 13px; cursor: pointer; color: #6b7280;
+      transition: all .15s;
+    }
+    .rate-btn:hover   { border-color: #9ca3af; color: #374151; }
+    .rate-btn.liked   { background: #f0fdf4; border-color: #86efac; color: #16a34a; }
+    .rate-btn.disliked { background: #fef2f2; border-color: #fca5a5; color: #dc2626; }
+
+    /* keyword chips */
+    .keyword-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #eff6ff; border: 1px solid #bfdbfe;
+      border-radius: 20px; padding: 4px 12px;
+      font-size: 13px; margin: 4px; cursor: pointer;
+    }
+    .keyword-chip.selected { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .keyword-chip input[type=checkbox] { display: none; }
+
+    /* tip list */
+    .tip-list { list-style: none; padding: 0; margin-top: 12px; }
+    .tip-list li {
+      padding: 10px 14px;
+      border-left: 3px solid #2563eb;
+      background: #eff6ff;
+      border-radius: 0 6px 6px 0;
+      font-size: 14px;
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
+
+    /* notices */
+    .notice { padding: 12px 16px; border-radius: 6px; font-size: 14px; margin-bottom: 16px; }
+    .notice-info    { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+    .notice-success { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+    .notice-error   { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+
+    /* spinners */
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+    }
+    .spinner-dark { border-color: rgba(0,0,0,.15); border-top-color: #374151; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* tag list */
+    .tag-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .tag {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #f3f4f6; border: 1px solid #d1d5db;
+      border-radius: 20px; padding: 4px 10px; font-size: 13px;
+    }
+    .tag .remove-tag {
+      background: none; border: none; color: #9ca3af; cursor: pointer;
+      font-size: 14px; line-height: 1; padding: 0;
+    }
+    .tag .remove-tag:hover { color: #dc2626; }
+
+    /* threshold */
+    .threshold-row { display: flex; align-items: center; gap: 16px; }
+    .threshold-row input[type=range] { flex: 1; }
+    .threshold-value { font-weight: 700; font-size: 20px; color: #2563eb; min-width: 40px; }
+
+    /* save bar */
+    .save-bar {
+      position: sticky; bottom: 0;
+      background: #fff; border-top: 1px solid #e5e7eb;
+      padding: 16px 24px;
+      display: flex; align-items: center; justify-content: space-between;
+      margin: 0 -24px;
+    }
+    .save-bar .save-status { font-size: 13px; color: #6b7280; }
+
+    /* ── History tab ─────────────────────────────────────────────── */
+    .hist-controls {
+      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .filter-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+    .filter-tab {
+      background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px;
+      padding: 5px 12px; font-size: 13px; font-weight: 500;
+      cursor: pointer; color: #374151; transition: all .15s;
+    }
+    .filter-tab.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .hist-search { flex: 1; min-width: 160px; }
+    .hist-sort { width: 150px; }
+
+    .hist-row {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      overflow: hidden;
+    }
+    .hist-row .row-main {
+      display: flex; align-items: flex-start; gap: 12px;
+      padding: 12px 16px;
+    }
+    .hist-row .row-info { flex: 1; min-width: 0; }
+    .hist-row .row-title {
+      font-weight: 600; font-size: 14px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .hist-row .row-meta { font-size: 12px; color: #6b7280; margin-top: 2px; }
+    .hist-row .row-meta a { color: #2563eb; text-decoration: none; }
+    .hist-row .row-meta a:hover { text-decoration: underline; }
+    .hist-row .row-actions {
+      display: flex; gap: 4px; align-items: center; flex-shrink: 0;
+    }
+    .hist-row .row-actions .rate-btn { padding: 3px 8px; font-size: 12px; }
+    .icon-btn {
+      background: none; border: 1px solid #e5e7eb; border-radius: 6px;
+      padding: 3px 8px; font-size: 13px; cursor: pointer; color: #9ca3af;
+      transition: all .15s;
+    }
+    .icon-btn:hover { border-color: #9ca3af; color: #374151; }
+    .icon-btn.note-active { border-color: #bfdbfe; color: #2563eb; background: #eff6ff; position: relative; }
+    .icon-btn.note-active::after {
+      content: '';
+      position: absolute; top: 2px; right: 2px;
+      width: 6px; height: 6px; border-radius: 50%;
+      background: #2563eb;
+    }
+
+    .sent-badge {
+      display: inline-block; padding: 1px 7px; border-radius: 20px;
+      font-size: 11px; font-weight: 600;
+      background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0;
+    }
+
+    .row-notes-panel {
+      display: none;
+      padding: 0 16px 12px 16px;
+      border-top: 1px solid #f3f4f6;
+    }
+    .row-notes-panel.open { display: block; }
+    .row-notes-panel textarea {
+      min-height: 64px; font-size: 13px; margin-top: 8px; margin-bottom: 6px;
+    }
+
+    /* pagination */
+    .pagination {
+      display: flex; align-items: center; justify-content: center;
+      gap: 12px; margin-top: 16px; font-size: 14px;
+    }
+    .pagination button {
+      padding: 6px 14px; border-radius: 6px; border: 1px solid #d1d5db;
+      background: #fff; cursor: pointer; font-size: 13px; font-weight: 500;
+    }
+    .pagination button:disabled { opacity: .4; cursor: not-allowed; }
+    .pagination .page-info { color: #6b7280; }
+
+    /* insights panel */
+    #insights-panel {
+      display: none;
+      background: #fefce8; border: 1px solid #fde68a;
+      border-radius: 8px; padding: 16px; margin-bottom: 16px;
+    }
+    #insights-panel h3 { font-size: 14px; font-weight: 600; margin-bottom: 10px; color: #92400e; }
+    #insights-panel .tip-list li { background: #fffbeb; border-color: #f59e0b; }
+    /* insights history */
+    .insight-entry {
+      border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 16px;
+      margin-bottom: 10px;
+    }
+    .insight-entry.reverted { opacity: .5; }
+    .insight-entry-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px; }
+    .insight-entry-date { font-size:12px; color:#6b7280; }
+    .insight-entry-summary { font-size:13px; color:#374151; margin-bottom:8px; }
+    .insight-entry-chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+    .chip { display:inline-block; padding:2px 8px; border-radius:12px; font-size:12px; font-weight:500; }
+    .chip-boost    { background:#dcfce7; color:#166534; }
+    .chip-penalize { background:#fee2e2; color:#991b1b; }
+    .chip-term     { background:#dbeafe; color:#1e40af; }
+
+    /* feedback reminder banner */
+    #insights-reminder {
+      display: none;
+      background: #eff6ff; border: 1px solid #bfdbfe;
+      border-radius: 8px; padding: 12px 16px; margin-bottom: 14px;
+      font-size: 13px; color: #1e40af;
+      display: none; align-items: center; gap: 10px;
+    }
+    #insights-reminder span { flex: 1; }
+    #insights-reminder button { font-size: 12px; padding: 4px 10px; }
+    /* insights context input */
+    #insights-context {
+      flex: 1; min-width: 200px;
+      padding: 6px 10px; border-radius: 6px; border: 1px solid #d1d5db;
+      font-size: 13px; color: #374151;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <img src="/static/favicon.png" style="height:32px;width:32px;object-fit:contain;border-radius:6px;">
+  <h1>Job Jigsaw</h1>
+</header>
+
+<nav>
+  <button class="active" onclick="switchTab('resume', this)">Resume</button>
+  <button onclick="switchTab('keywords', this)">Keywords</button>
+  <button onclick="switchTab('settings', this)">Settings</button>
+  <button onclick="switchTab('preview', this)">Preview</button>
+  <button onclick="switchTab('history', this)">History</button>
+  <button onclick="switchTab('insights', this)">Insights</button>
+</nav>
+
+<main>
+
+  <!-- ── RESUME TAB ─────────────────────────────────────────────── -->
+  <div id="tab-resume" class="tab active">
+
+    <div class="card">
+      <h2>Resume</h2>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <label style="margin:0">Resume text</label>
+        <label class="btn btn-secondary" style="cursor:pointer;font-size:13px;padding:5px 12px;">
+          <span id="upload-label">Upload PDF or Word</span>
+          <input type="file" id="resume-file" accept=".pdf,.docx,.doc"
+                 style="display:none" onchange="uploadResume(this)">
+        </label>
+      </div>
+      <textarea id="resume" rows="14" placeholder="Paste your resume here, or upload a PDF/Word file above..."></textarea>
+    </div>
+
+    <div class="card">
+      <h2>What you're looking for</h2>
+      <label>Plain English — the AI scorer uses this for context</label>
+      <textarea id="description" rows="4"
+        placeholder="e.g. Looking for BDR/SDR roles at Toronto SaaS companies..."></textarea>
+    </div>
+
+    <div class="card">
+      <h2>AI Tools</h2>
+      <p style="font-size:13px;color:#6b7280;margin-bottom:16px;">
+        Analyse suggests job titles and keywords. Resume Tips reviews your resume for improvements.
+      </p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="runAnalyse()">
+          <span id="analyse-spinner" style="display:none" class="spinner"></span>
+          Analyse with AI
+        </button>
+        <button class="btn btn-secondary" onclick="runResumeTips()">
+          <span id="tips-spinner" style="display:none" class="spinner spinner-dark"></span>
+          Get Resume Tips
+        </button>
+      </div>
+
+      <div id="tips-results" style="display:none;margin-top:20px;">
+        <label style="margin-bottom:4px;">Suggestions to improve your resume</label>
+        <ul id="tips-list" class="tip-list"></ul>
+      </div>
+
+      <div id="analyse-results" style="display:none;margin-top:20px;">
+        <div style="margin-bottom:16px;">
+          <label style="margin-bottom:8px;">Suggested job titles (click to select)</label>
+          <div id="title-chips" class="tag-list"></div>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="margin-bottom:8px;">Boost keywords (click to select)</label>
+          <div id="boost-chips"></div>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="margin-bottom:8px;">Penalize keywords (click to select)</label>
+          <div id="penalize-chips"></div>
+        </div>
+        <button class="btn btn-success" onclick="saveSelected()">Save Selected</button>
+      </div>
+    </div>
+
+    <div class="save-bar">
+      <span class="save-status" id="resume-save-status"></span>
+      <button class="btn btn-primary" onclick="saveResume()">Save Resume &amp; Description</button>
+    </div>
+  </div>
+
+  <!-- ── KEYWORDS TAB ───────────────────────────────────────────── -->
+  <div id="tab-keywords" class="tab">
+
+    <div class="card">
+      <h2>Score threshold</h2>
+      <div class="threshold-row">
+        <input type="range" id="threshold" min="30" max="90" step="5"
+               oninput="updateThreshold(this.value)">
+        <span class="threshold-value" id="threshold-display">55</span>
+        <span style="font-size:14px;color:#6b7280;">/ 100</span>
+      </div>
+      <p style="font-size:13px;color:#6b7280;margin-top:8px;">
+        Jobs at or above this score will be included in the digest.
+      </p>
+      <div style="margin-top:16px;display:flex;align-items:center;gap:12px;">
+        <label style="font-size:14px;color:#374151;font-weight:500;margin:0;">Jobs per daily email</label>
+        <input type="number" id="max-jobs" min="1" max="100"
+               style="width:70px;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Boost keywords</h2>
+      <table>
+        <thead><tr><th>Keyword</th><th>Weight</th><th></th></tr></thead>
+        <tbody id="boost-table"></tbody>
+      </table>
+      <button class="btn btn-secondary" style="margin-top:12px" onclick="addBoostRow()">+ Add keyword</button>
+    </div>
+
+    <div class="card">
+      <h2>Penalize keywords</h2>
+      <table>
+        <thead><tr><th>Keyword</th><th>Weight (negative)</th><th></th></tr></thead>
+        <tbody id="penalize-table"></tbody>
+      </table>
+      <button class="btn btn-secondary" style="margin-top:12px" onclick="addPenalizeRow()">+ Add keyword</button>
+    </div>
+
+    <div class="save-bar">
+      <span class="save-status" id="keywords-save-status"></span>
+      <button class="btn btn-primary" onclick="saveKeywords()">Save Keywords</button>
+    </div>
+  </div>
+
+  <!-- ── SETTINGS TAB ───────────────────────────────────────────── -->
+  <div id="tab-settings" class="tab">
+
+    <div class="card">
+      <h2>Search terms</h2>
+      <p style="font-size:13px;color:#6b7280;margin-bottom:12px;">
+        These get searched on Indeed and LinkedIn.
+      </p>
+      <div id="search-terms-list" class="tag-list"></div>
+      <div class="row" style="margin-top:12px;">
+        <div style="flex:1">
+          <input type="text" id="new-term" placeholder="e.g. Account Executive"
+                 onkeydown="if(event.key==='Enter')addSearchTerm()">
+        </div>
+        <button class="btn btn-secondary" onclick="addSearchTerm()">Add</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Location &amp; remote</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+        <div>
+          <label>Primary location</label>
+          <input type="text" id="location-primary" value="Toronto, ON">
+        </div>
+        <div>
+          <label>Max jobs per email</label>
+          <input type="number" id="max-jobs" min="1" max="50" value="15" style="width:100px">
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;">
+        <input type="checkbox" id="remote-toggle" style="width:auto">
+        Include remote Canada roles
+      </label>
+    </div>
+
+    <div class="card">
+      <h2>Email send time</h2>
+      <div class="row">
+        <div>
+          <label>Daily send time (Toronto time)</label>
+          <input type="time" id="send-time" value="18:00" style="width:140px">
+        </div>
+      </div>
+    </div>
+
+    <div class="save-bar">
+      <span class="save-status" id="settings-save-status"></span>
+      <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+    </div>
+  </div>
+
+  <!-- ── PREVIEW TAB ────────────────────────────────────────────── -->
+  <div id="tab-preview" class="tab">
+
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+      <div>
+        <h2 style="margin-bottom:4px;">Tonight's digest preview</h2>
+        <p style="font-size:13px;color:#6b7280;">
+          Jobs above threshold, excluding disliked. Like/dislike to train the digest.
+        </p>
+        <p style="font-size:12px;color:#9ca3af;margin-top:6px;" id="scraper-status-line">
+          Checking scraper status…
+        </p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="loadPreview()">Refresh</button>
+        <button class="btn btn-secondary" onclick="runScraper()">
+          <span id="scraper-spinner" style="display:none" class="spinner spinner-dark"></span>
+          Run scraper now
+        </button>
+        <button class="btn btn-secondary" style="border-color:#7c3aed;color:#7c3aed;" onclick="runDeepSearch()">
+          <span id="deep-spinner" style="display:none" class="spinner spinner-dark"></span>
+          Deep search
+        </button>
+        <button class="btn btn-primary" onclick="sendTest()">
+          <span id="test-spinner" style="display:none" class="spinner"></span>
+          Send test email
+        </button>
+      </div>
+    </div>
+
+    <div id="preview-notice"></div>
+    <div id="preview-jobs"></div>
+
+  </div>
+
+  <!-- ── HISTORY TAB ────────────────────────────────────────────── -->
+  <div id="tab-history" class="tab">
+
+    <div class="hist-controls">
+      <div class="filter-tabs">
+        <button class="filter-tab" onclick="setHistFilter('all', this)">All</button>
+        <button class="filter-tab" onclick="setHistFilter('liked', this)">Liked</button>
+        <button class="filter-tab" onclick="setHistFilter('disliked', this)">Disliked</button>
+        <button class="filter-tab active" onclick="setHistFilter('sent', this)">Sent</button>
+        <button class="filter-tab" onclick="setHistFilter('unsent', this)">Unsent</button>
+      </div>
+      <select id="hist-sent-date" class="hist-sort" onchange="setHistSentDate(this.value)" style="display:none;">
+        <option value="">All dates</option>
+      </select>
+      <input class="hist-search" type="text" placeholder="Search title or company…"
+             oninput="onHistSearch(this.value)">
+      <select class="hist-sort" onchange="setHistSort(this.value)">
+        <option value="score">Highest score</option>
+        <option value="discovered">Newest found</option>
+        <option value="posted">Date posted</option>
+      </select>
+      <input id="insights-context" type="text" placeholder="Optional context, e.g. "focus on remote roles"">
+      <button class="btn btn-secondary" onclick="loadInsights()">
+        <span id="insights-spinner" style="display:none" class="spinner spinner-dark"></span>
+        AI Insights
+      </button>
+    </div>
+
+    <div id="insights-reminder">
+      <span id="insights-reminder-text"></span>
+      <button class="btn btn-secondary" onclick="loadInsights()">Update profile now</button>
+    </div>
+
+    <div id="insights-panel">
+      <h3>Proposal ready</h3>
+      <p id="insights-message" style="margin:0;font-size:13px;color:#92400e;"></p>
+    </div>
+
+    <div id="hist-notice"></div>
+    <div id="hist-jobs"></div>
+
+    <div class="pagination" id="hist-pagination" style="display:none;">
+      <button id="hist-prev" onclick="histGoPage(histPage - 1)">← Prev</button>
+      <span class="page-info" id="hist-page-info"></span>
+      <button id="hist-next" onclick="histGoPage(histPage + 1)">Next →</button>
+    </div>
+
+  </div>
+
+  <!-- ── INSIGHTS TAB ───────────────────────────────────────────── -->
+  <div id="tab-insights" class="tab">
+
+    <!-- Pending proposal -->
+    <div id="insights-proposal-card" style="display:none;" class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h2 style="margin:0;">Pending Proposal</h2>
+        <span style="font-size:12px;color:#6b7280;" id="insights-proposed-at"></span>
+      </div>
+      <p id="insights-proposal-summary" style="color:#374151;font-size:14px;margin:0 0 14px;"></p>
+      <div id="insights-proposal-diff" style="font-size:13px;color:#374151;margin-bottom:16px;"></div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-primary" onclick="approveProposal()">
+          <span id="approve-spinner" style="display:none" class="spinner"></span>
+          Approve
+        </button>
+        <button class="btn btn-secondary" onclick="rejectProposal()" style="color:#dc2626;border-color:#dc2626;">
+          Reject
+        </button>
+      </div>
+    </div>
+
+    <div id="insights-no-proposal" style="display:none;color:#6b7280;font-size:14px;padding:8px 0 20px;">
+      No pending proposal. Use the <strong>AI Insights</strong> button on the History tab to generate one.
+    </div>
+
+    <!-- Change history -->
+    <div class="card">
+      <h2>Insights History</h2>
+      <div id="insights-history-list">
+        <p style="color:#6b7280;font-size:14px;">Loading…</p>
+      </div>
+    </div>
+
+  </div>
+
+</main>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let profile = null;
+let analyseData = null;
+
+let histPage      = 1;
+let histFilter    = 'sent';
+let histSort      = 'score';
+let histQ         = '';
+let histSentDate  = '';
+let histDebounce  = null;
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function init() {
+  profile = await api('GET', '/api/profile');
+  populateAll();
+}
+
+function populateAll() {
+  document.getElementById('resume').value = profile.resume || '';
+  document.getElementById('description').value = profile.description || '';
+  populateBoostTable();
+  populatePenalizeTable();
+  const notif = profile.notification || {};
+  document.getElementById('threshold').value = notif.score_threshold || 55;
+  document.getElementById('threshold-display').textContent = notif.score_threshold || 55;
+  document.getElementById('max-jobs').value = notif.max_jobs_per_email || 15;
+  const schedule = notif.schedule || '0 18 * * *';
+  const hour = schedule.split(' ')[1].padStart(2, '0');
+  const min  = schedule.split(' ')[0].padStart(2, '0');
+  document.getElementById('send-time').value = `${hour}:${min}`;
+  const search = profile.search || {};
+  document.getElementById('remote-toggle').checked = search.remote !== false;
+  document.getElementById('location-primary').value = (search.locations || ['Toronto, ON'])[0];
+  renderSearchTerms(search.terms || []);
+}
+
+function populateBoostTable() {
+  const tbody = document.getElementById('boost-table');
+  tbody.innerHTML = '';
+  for (const item of (profile.scoring?.boost || []))
+    tbody.appendChild(makeKeywordRow('boost', item.keyword, item.weight));
+}
+
+function populatePenalizeTable() {
+  const tbody = document.getElementById('penalize-table');
+  tbody.innerHTML = '';
+  for (const item of (profile.scoring?.penalize || []))
+    tbody.appendChild(makeKeywordRow('penalize', item.keyword, item.weight));
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+  if (name === 'preview') { loadPreview(); loadScraperStatus(); }
+  if (name === 'history') { loadHistory(); loadInsightsStatus(); loadSentDates(); document.getElementById('hist-sent-date').style.display = ''; }
+  if (name === 'insights') { loadInsightsTab(); }
+}
+
+// ── Keyword table helpers ─────────────────────────────────────────────────────
+function makeKeywordRow(type, keyword, weight) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" value="${escHtml(keyword)}" placeholder="keyword"></td>
+    <td><input type="number" value="${weight}" step="${type === 'penalize' ? -5 : 5}"></td>
+    <td><button class="remove-btn" onclick="this.closest('tr').remove()">×</button></td>`;
+  return tr;
+}
+function addBoostRow()   { document.getElementById('boost-table').appendChild(makeKeywordRow('boost', '', 10)); }
+function addPenalizeRow() { document.getElementById('penalize-table').appendChild(makeKeywordRow('penalize', '', -20)); }
+function readTable(id) {
+  return [...document.querySelectorAll(`#${id} tr`)].map(tr => {
+    const inputs = tr.querySelectorAll('input');
+    return { keyword: inputs[0].value.trim(), weight: parseInt(inputs[1].value) || 0 };
+  }).filter(r => r.keyword);
+}
+
+// ── Threshold ─────────────────────────────────────────────────────────────────
+function updateThreshold(val) { document.getElementById('threshold-display').textContent = val; }
+
+// ── Search terms ──────────────────────────────────────────────────────────────
+function renderSearchTerms(terms) {
+  const list = document.getElementById('search-terms-list');
+  list.innerHTML = '';
+  for (const term of terms) {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.innerHTML = `${escHtml(term)}<button class="remove-tag" onclick="this.closest('.tag').remove()">×</button>`;
+    list.appendChild(tag);
+  }
+}
+function addSearchTerm() {
+  const input = document.getElementById('new-term');
+  const val = input.value.trim();
+  if (!val) return;
+  const tag = document.createElement('span');
+  tag.className = 'tag';
+  tag.innerHTML = `${escHtml(val)}<button class="remove-tag" onclick="this.closest('.tag').remove()">×</button>`;
+  document.getElementById('search-terms-list').appendChild(tag);
+  input.value = '';
+}
+function readSearchTerms() {
+  return [...document.querySelectorAll('#search-terms-list .tag')]
+    .map(t => t.childNodes[0].textContent.trim()).filter(Boolean);
+}
+
+// ── Save actions ──────────────────────────────────────────────────────────────
+async function saveResume() {
+  profile.resume = document.getElementById('resume').value;
+  profile.description = document.getElementById('description').value;
+  await saveProfile('resume-save-status');
+}
+async function saveKeywords() {
+  if (!profile.scoring) profile.scoring = {};
+  profile.scoring.boost    = readTable('boost-table');
+  profile.scoring.penalize = readTable('penalize-table');
+  profile.notification = profile.notification || {};
+  profile.notification.score_threshold = parseInt(document.getElementById('threshold').value);
+  await saveProfile('keywords-save-status');
+}
+async function saveSettings() {
+  if (!profile.search) profile.search = {};
+  profile.search.terms     = readSearchTerms();
+  const loc = document.getElementById('location-primary').value.trim();
+  profile.search.locations = loc ? [loc, 'Canada'] : ['Toronto, ON', 'Canada'];
+  profile.search.remote    = document.getElementById('remote-toggle').checked;
+  profile.notification = profile.notification || {};
+  profile.notification.max_jobs_per_email = parseInt(document.getElementById('max-jobs').value);
+  const [h, m] = document.getElementById('send-time').value.split(':');
+  profile.notification.schedule = `${parseInt(m)} ${parseInt(h)} * * *`;
+  await saveProfile('settings-save-status');
+}
+async function saveProfile(statusId) {
+  const el = document.getElementById(statusId);
+  el.textContent = 'Saving…';
+  try {
+    await api('POST', '/api/profile', profile);
+    el.textContent = '✓ Saved';
+    setTimeout(() => el.textContent = '', 3000);
+  } catch (e) {
+    el.textContent = '✗ Error: ' + e.message;
+  }
+}
+
+// ── Resume upload ─────────────────────────────────────────────────────────────
+async function uploadResume(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const label = document.getElementById('upload-label');
+  label.textContent = 'Parsing…';
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const resp = await fetch('/api/parse-resume', { method: 'POST', body: form });
+    if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.detail || resp.statusText); }
+    document.getElementById('resume').value = (await resp.json()).text;
+    label.textContent = '✓ Parsed';
+    setTimeout(() => label.textContent = 'Upload PDF or Word', 3000);
+  } catch (e) {
+    alert('Upload failed: ' + e.message);
+    label.textContent = 'Upload PDF or Word';
+  }
+  input.value = '';
+}
+
+// ── Analyse ───────────────────────────────────────────────────────────────────
+async function runAnalyse() {
+  const spinner = document.getElementById('analyse-spinner');
+  spinner.style.display = 'inline-block';
+  document.getElementById('analyse-results').style.display = 'none';
+  try {
+    analyseData = await api('POST', '/api/analyse', {
+      resume: document.getElementById('resume').value,
+      description: document.getElementById('description').value,
+    });
+    document.getElementById('title-chips').innerHTML =
+      analyseData.titles.map(t =>
+        `<label class="keyword-chip"><input type="checkbox" value="${escHtml(t)}">${escHtml(t)}</label>`
+      ).join('');
+    document.getElementById('boost-chips').innerHTML =
+      analyseData.boost.map(k =>
+        `<label class="keyword-chip"><input type="checkbox" value="${escHtml(k.keyword)}" data-weight="${k.weight}">${escHtml(k.keyword)} <span style="opacity:.6">+${k.weight}</span></label>`
+      ).join('');
+    document.getElementById('penalize-chips').innerHTML =
+      analyseData.penalize.map(k =>
+        `<label class="keyword-chip"><input type="checkbox" value="${escHtml(k.keyword)}" data-weight="${k.weight}">${escHtml(k.keyword)} <span style="opacity:.6">${k.weight}</span></label>`
+      ).join('');
+    document.querySelectorAll('.keyword-chip').forEach(c => c.addEventListener('click', () => c.classList.toggle('selected')));
+    document.getElementById('analyse-results').style.display = 'block';
+  } catch (e) { alert('Analyse failed: ' + e.message); }
+  finally { spinner.style.display = 'none'; }
+}
+
+async function runResumeTips() {
+  const spinner = document.getElementById('tips-spinner');
+  spinner.style.display = 'inline-block';
+  document.getElementById('tips-results').style.display = 'none';
+  try {
+    const { tips } = await api('POST', '/api/resume-tips', {
+      resume: document.getElementById('resume').value,
+      description: document.getElementById('description').value,
+    });
+    document.getElementById('tips-list').innerHTML = tips.map(t => `<li>${escHtml(t)}</li>`).join('');
+    document.getElementById('tips-results').style.display = 'block';
+  } catch (e) { alert('Resume tips failed: ' + e.message); }
+  finally { spinner.style.display = 'none'; }
+}
+
+function saveSelected() {
+  const titles   = [...document.querySelectorAll('#title-chips input:checked')].map(i => i.value);
+  const boost    = [...document.querySelectorAll('#boost-chips input:checked')].map(i => ({ keyword: i.value, weight: parseInt(i.dataset.weight) }));
+  const penalize = [...document.querySelectorAll('#penalize-chips input:checked')].map(i => ({ keyword: i.value, weight: parseInt(i.dataset.weight) }));
+  if (titles.length)   renderSearchTerms([...new Set([...readSearchTerms(), ...titles])]);
+  if (boost.length)    boost.forEach(item => document.getElementById('boost-table').appendChild(makeKeywordRow('boost', item.keyword, item.weight)));
+  if (penalize.length) penalize.forEach(item => document.getElementById('penalize-table').appendChild(makeKeywordRow('penalize', item.keyword, item.weight)));
+  document.getElementById('analyse-results').style.display = 'none';
+  notice('resume-save-status', '✓ Added — remember to save each tab');
+}
+
+// ── Scraper status ────────────────────────────────────────────────────────────
+function nextCronRun() {
+  const now = new Date(), next = new Date(now);
+  const h = now.getHours(), m = now.getMinutes();
+  const nextH = [0, 6, 12, 18].find(s => s > h || (s === h && m === 0));
+  if (nextH !== undefined) { next.setHours(nextH, 0, 0, 0); }
+  else { next.setDate(next.getDate() + 1); next.setHours(0, 0, 0, 0); }
+  return next;
+}
+function formatRelative(iso) {
+  if (!iso) return null;
+  const m = Math.floor((Date.now() - new Date(iso)) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ago` : `${Math.floor(h/24)}d ago`;
+}
+function formatCountdown(date) {
+  const ms = date - Date.now();
+  if (ms <= 0) return 'any moment';
+  const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+async function loadScraperStatus() {
+  try {
+    const { last_run } = await api('GET', '/api/scraper-status');
+    const next = nextCronRun();
+    document.getElementById('scraper-status-line').textContent =
+      `${last_run ? 'Last run: ' + formatRelative(last_run) : 'Never run'} · Next auto-run in ${formatCountdown(next)} (${next.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})`;
+  } catch { document.getElementById('scraper-status-line').textContent = ''; }
+}
+
+// ── Rating (shared by preview + history) ─────────────────────────────────────
+async function rateJob(jobUrl, rating, btn, removeOnDislike) {
+  const card = btn.closest('[data-url]');
+  const likeBtn    = card.querySelector('.like-btn');
+  const dislikeBtn = card.querySelector('.dislike-btn');
+  const current = likeBtn.classList.contains('liked') ? 1
+    : dislikeBtn.classList.contains('disliked') ? -1 : 0;
+  const newRating = current === rating ? 0 : rating;
+  try {
+    await api('POST', '/api/jobs/rate', { job_url: jobUrl, rating: newRating });
+    likeBtn.classList.toggle('liked', newRating === 1);
+    dislikeBtn.classList.toggle('disliked', newRating === -1);
+    if (removeOnDislike && newRating === -1) {
+      card.style.opacity = '0';
+      card.style.transition = 'opacity .3s';
+      setTimeout(() => card.remove(), 300);
+    }
+  } catch (e) { alert('Could not save rating: ' + e.message); }
+}
+
+// ── Preview ───────────────────────────────────────────────────────────────────
+function renderJobs(jobs) {
+  document.getElementById('preview-jobs').innerHTML = jobs.map(j => {
+    const score = j.score || 0;
+    const scoreClass = score >= 70 ? 'score-green' : 'score-yellow';
+    const badges = [
+      j.is_remote ? '<span class="keyword-chip selected" style="cursor:default;">Remote</span>' : '',
+      j.job_type  ? `<span class="keyword-chip" style="cursor:default;">${j.job_type.replace(/_/g,' ')}</span>` : '',
+    ].join('');
+    return `<div class="job-card" data-url="${escHtml(j.job_url)}">
+      <div><span class="score-badge ${scoreClass}">${score}/100</span>${badges}</div>
+      <div class="job-title">${escHtml(j.title || '')}</div>
+      <div class="job-meta">${escHtml(j.company || '')} · 📍 ${escHtml(j.location || '')}${j.date_posted ? ' · Posted: ' + escHtml(j.date_posted) : ''}</div>
+      <div class="job-footer">
+        <a href="${escHtml(j.job_url || '#')}" target="_blank" rel="noopener">View Job →</a>
+        <div style="display:flex;gap:6px;">
+          <button class="rate-btn like-btn ${j.user_rating===1?'liked':''}" onclick="rateJob(${escHtml(JSON.stringify(j.job_url))},1,this,true)">👍 Interested</button>
+          <button class="rate-btn dislike-btn ${j.user_rating===-1?'disliked':''}" onclick="rateJob(${escHtml(JSON.stringify(j.job_url))},-1,this,true)">👎 Not for me</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function loadPreview() {
+  const noticeEl = document.getElementById('preview-notice');
+  noticeEl.innerHTML = '<div class="notice notice-info">Loading…</div>';
+  document.getElementById('preview-jobs').innerHTML = '';
+  try {
+    const { jobs, count } = await api('GET', '/api/preview');
+    if (count === 0) {
+      noticeEl.innerHTML = '<div class="notice notice-info">No jobs found above threshold. Run the scraper to find jobs.</div>';
+      return;
+    }
+    noticeEl.innerHTML = `<div class="notice notice-success">${count} job${count!==1?'s':''} would be sent tonight.</div>`;
+    renderJobs(jobs);
+  } catch (e) {
+    noticeEl.innerHTML = `<div class="notice notice-error">Error: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function startPolling(spinnerId, label) {
+  const spinner  = document.getElementById(spinnerId);
+  const noticeEl = document.getElementById('preview-notice');
+  spinner.style.display = 'inline-block';
+  let lastCount = 0, staleTicks = 0, maxLeft = 23;
+  noticeEl.innerHTML = `<div class="notice notice-info">${label}</div>`;
+  const poll = setInterval(async () => {
+    try {
+      const { jobs, count } = await api('GET', '/api/preview');
+      if (count !== lastCount) {
+        lastCount = count; staleTicks = 0;
+        renderJobs(jobs);
+        noticeEl.innerHTML = `<div class="notice notice-info">${label.split('—')[0]}— ${count} job${count!==1?'s':''} found so far…</div>`;
+      } else { staleTicks++; }
+    } catch { staleTicks++; }
+    if (staleTicks >= 3 || --maxLeft <= 0) {
+      clearInterval(poll);
+      spinner.style.display = 'none';
+      loadScraperStatus();
+      noticeEl.innerHTML = lastCount > 0
+        ? `<div class="notice notice-success">Done — ${lastCount} job${lastCount!==1?'s':''} above threshold.</div>`
+        : '<div class="notice notice-info">Done — no jobs above threshold yet.</div>';
+    }
+  }, 8000);
+}
+
+async function runScraper() {
+  try { await api('POST', '/api/run-scraper'); }
+  catch (e) { document.getElementById('preview-notice').innerHTML = `<div class="notice notice-error">Error: ${escHtml(e.message)}</div>`; return; }
+  startPolling('scraper-spinner', 'Scraper running — jobs will appear below as they\'re scored…');
+}
+async function runDeepSearch() {
+  try { await api('POST', '/api/deep-search'); }
+  catch (e) { document.getElementById('preview-notice').innerHTML = `<div class="notice notice-error">Error: ${escHtml(e.message)}</div>`; return; }
+  startPolling('deep-spinner', 'Deep search running — finding all currently listed jobs…');
+}
+async function sendTest() {
+  const spinner = document.getElementById('test-spinner');
+  spinner.style.display = 'inline-block';
+  try {
+    const result = await api('POST', '/api/test-send');
+    document.getElementById('preview-notice').innerHTML = `<div class="notice ${result.ok?'notice-success':'notice-info'}">${escHtml(result.message)}</div>`;
+  } catch (e) {
+    document.getElementById('preview-notice').innerHTML = `<div class="notice notice-error">Error: ${escHtml(e.message)}</div>`;
+  } finally { spinner.style.display = 'none'; }
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+function setHistFilter(f, btn) {
+  histFilter = f; histPage = 1; histSentDate = '';
+  document.querySelectorAll('.filter-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const dateEl = document.getElementById('hist-sent-date');
+  if (f === 'sent') {
+    dateEl.style.display = '';
+    loadSentDates();
+  } else {
+    dateEl.style.display = 'none';
+  }
+  loadHistory();
+}
+function setHistSort(v) { histSort = v; histPage = 1; loadHistory(); }
+function setHistSentDate(v) { histSentDate = v; histPage = 1; loadHistory(); }
+
+async function loadSentDates() {
+  try {
+    const dates = await api('GET', '/api/history/sent-dates');
+    const sel = document.getElementById('hist-sent-date');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">All dates</option>' +
+      dates.map(d => `<option value="${d}"${d === prev ? ' selected' : ''}>${d}</option>`).join('');
+  } catch { /* ignore */ }
+}
+function onHistSearch(v) {
+  histQ = v; histPage = 1;
+  clearTimeout(histDebounce);
+  histDebounce = setTimeout(loadHistory, 300);
+}
+function histGoPage(p) {
+  histPage = p; loadHistory();
+  document.getElementById('tab-history').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function scoreBadgeClass(score) {
+  return score >= 70 ? 'score-green' : score >= 50 ? 'score-yellow' : 'score-red';
+}
+
+async function loadHistory() {
+  const noticeEl = document.getElementById('hist-notice');
+  const jobsEl   = document.getElementById('hist-jobs');
+  noticeEl.innerHTML = '<div class="notice notice-info">Loading…</div>';
+  jobsEl.innerHTML = '';
+  document.getElementById('hist-pagination').style.display = 'none';
+
+  try {
+    const params = new URLSearchParams({ page: histPage, filter: histFilter, sort: histSort, q: histQ, sent_date: histSentDate });
+    const data = await api('GET', `/api/history?${params}`);
+    noticeEl.innerHTML = '';
+
+    if (data.total === 0) {
+      noticeEl.innerHTML = '<div class="notice notice-info">No jobs found.</div>';
+      return;
+    }
+
+    const start = (data.page - 1) * 25 + 1;
+    const end   = Math.min(data.page * 25, data.total);
+    noticeEl.innerHTML = `<div class="notice notice-info" style="margin-bottom:8px;">${data.total} jobs · showing ${start}–${end}</div>`;
+
+    jobsEl.innerHTML = data.jobs.map(j => {
+      const score = j.score || 0;
+      const liked    = j.user_rating === 1;
+      const disliked = j.user_rating === -1;
+      const sentHtml = j.sent ? `<span class="sent-badge">Sent</span> ` : '';
+      const date = j.discovered_at ? new Date(j.discovered_at).toLocaleDateString() : '';
+      return `<div class="hist-row" data-url="${escHtml(j.job_url)}">
+        <div class="row-main">
+          <span class="score-badge ${scoreBadgeClass(score)}">${score}</span>
+          <div class="row-info">
+            <div class="row-title">${escHtml(j.title || '')}</div>
+            <div class="row-meta">
+              ${escHtml(j.company || '')} · ${escHtml(j.location || '')}
+              · ${sentHtml}<a href="${escHtml(j.job_url)}" target="_blank" rel="noopener">View →</a>
+              ${date ? ' · ' + date : ''}
+            </div>
+          </div>
+          <div class="row-actions">
+            <button class="rate-btn like-btn ${liked?'liked':''}"
+              onclick="rateJob(${escHtml(JSON.stringify(j.job_url))},1,this,false)">👍</button>
+            <button class="rate-btn dislike-btn ${disliked?'disliked':''}"
+              onclick="rateJob(${escHtml(JSON.stringify(j.job_url))},-1,this,false)">👎</button>
+            <button class="icon-btn ${j.notes?'note-active':''}"
+              title="Notes" onclick="toggleNote(this)">📝</button>
+          </div>
+        </div>
+        <div class="row-notes-panel ${j.notes?'open':''}">
+          <textarea placeholder="Add notes about this job…">${escHtml(j.notes||'')}</textarea>
+          <button class="btn btn-secondary" style="font-size:12px;padding:4px 10px;"
+            onclick="saveNote(${escHtml(JSON.stringify(j.job_url))},this)">Save note</button>
+        </div>
+      </div>`;
+    }).join('');
+
+    // Pagination
+    const pag = document.getElementById('hist-pagination');
+    pag.style.display = data.pages > 1 ? 'flex' : 'none';
+    document.getElementById('hist-prev').disabled = data.page <= 1;
+    document.getElementById('hist-next').disabled = data.page >= data.pages;
+    document.getElementById('hist-page-info').textContent =
+      `Page ${data.page} of ${data.pages} (${data.total} jobs)`;
+
+  } catch (e) {
+    noticeEl.innerHTML = `<div class="notice notice-error">Error: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function toggleNote(btn) {
+  const panel = btn.closest('.hist-row').querySelector('.row-notes-panel');
+  panel.classList.toggle('open');
+  const hasNote = !!panel.querySelector('textarea').value.trim();
+  btn.classList.toggle('note-active', hasNote);
+}
+
+async function saveNote(jobUrl, btn) {
+  const textarea = btn.closest('.row-notes-panel').querySelector('textarea');
+  try {
+    await api('POST', '/api/jobs/note', { job_url: jobUrl, notes: textarea.value });
+    const noteBtn = btn.closest('.hist-row').querySelector('.icon-btn[title="Notes"]');
+    noteBtn.classList.toggle('note-active', !!textarea.value.trim());
+    const orig = btn.textContent;
+    btn.textContent = '✓ Saved';
+    setTimeout(() => btn.textContent = orig, 1500);
+  } catch (e) { alert('Could not save note: ' + e.message); }
+}
+
+async function hideHistJob(jobUrl, btn) {
+  try {
+    await api('POST', '/api/jobs/hide', { job_url: jobUrl, hidden: true });
+    const row = btn.closest('.hist-row');
+    row.style.opacity = '0';
+    row.style.transition = 'opacity .2s';
+    setTimeout(() => { row.remove(); }, 200);
+  } catch (e) { alert('Could not hide job: ' + e.message); }
+}
+
+async function loadInsightsStatus() {
+  try {
+    const s = await api('GET', '/api/insights-status');
+    const reminder = document.getElementById('insights-reminder');
+    const n = s.new_since_last_run || 0;
+    if (n >= 3) {
+      document.getElementById('insights-reminder-text').textContent =
+        `You have ${n} new rating${n !== 1 ? 's' : ''}/note${n !== 1 ? 's' : ''} since the last AI profile update.` +
+        (n >= s.threshold ? ' Auto-update is queued.' : ' Run AI Insights to improve your profile.');
+      reminder.style.display = 'flex';
+    } else {
+      reminder.style.display = 'none';
+    }
+  } catch { /* ignore */ }
+}
+
+async function loadInsights() {
+  const spinner = document.getElementById('insights-spinner');
+  const panel   = document.getElementById('insights-panel');
+  const ctx     = (document.getElementById('insights-context').value || '').trim();
+  spinner.style.display = 'inline-block';
+  panel.style.display = 'none';
+  document.getElementById('insights-reminder').style.display = 'none';
+  try {
+    const data = await api('POST', '/api/history/summarize', { extra_prompt: ctx });
+    document.getElementById('insights-message').textContent =
+      data.summary ? `Proposal created — ${data.summary} Check the Insights tab to approve.` : 'Proposal created. Check the Insights tab to approve.';
+    panel.style.display = 'block';
+  } catch (e) { alert('Insights failed: ' + e.message); }
+  finally { spinner.style.display = 'none'; }
+}
+
+// ── Insights tab ──────────────────────────────────────────────────────────────
+async function loadInsightsTab() {
+  await Promise.all([loadProposal(), loadInsightsHistory()]);
+}
+
+async function loadProposal() {
+  try {
+    const p = await api('GET', '/api/insights/proposal');
+    const card   = document.getElementById('insights-proposal-card');
+    const noCard = document.getElementById('insights-no-proposal');
+    if (!p || !p.status) {
+      card.style.display = 'none';
+      noCard.style.display = 'block';
+      return;
+    }
+    noCard.style.display = 'none';
+    document.getElementById('insights-proposal-summary').textContent = p.summary || '';
+    document.getElementById('insights-proposed-at').textContent =
+      p.proposed_at ? formatRelative(p.proposed_at) : '';
+
+    const diff = document.getElementById('insights-proposal-diff');
+    const boost    = (p.boost_add    || []).map(i => `<span class="chip chip-boost">+${escHtml(i.keyword)}</span>`);
+    const penalize = (p.penalize_add || []).map(i => `<span class="chip chip-penalize">−${escHtml(i.keyword)}</span>`);
+    const terms    = (p.terms_add    || []).map(t => `<span class="chip chip-term">🔍 ${escHtml(t)}</span>`);
+    const all = [...boost, ...penalize, ...terms];
+    diff.innerHTML = all.length
+      ? `<div class="insight-entry-chips">${all.join('')}</div>`
+      : '<em style="color:#6b7280;">No changes proposed.</em>';
+
+    card.style.display = 'block';
+  } catch { /* ignore */ }
+}
+
+async function approveProposal() {
+  const spinner = document.getElementById('approve-spinner');
+  spinner.style.display = 'inline-block';
+  try {
+    const r = await api('POST', '/api/insights/approve');
+    alert(r.message);
+    await loadInsightsTab();
+  } catch (e) { alert('Approve failed: ' + e.message); }
+  finally { spinner.style.display = 'none'; }
+}
+
+async function rejectProposal() {
+  try {
+    const r = await api('POST', '/api/insights/reject');
+    alert(r.message);
+    await loadInsightsTab();
+  } catch (e) { alert('Reject failed: ' + e.message); }
+}
+
+async function loadInsightsHistory() {
+  const el = document.getElementById('insights-history-list');
+  try {
+    const history = await api('GET', '/api/insights/history');
+    if (!history.length) {
+      el.innerHTML = '<p style="color:#6b7280;font-size:14px;">No profile updates yet.</p>';
+      return;
+    }
+    el.innerHTML = history.map((entry, i) => {
+      const boost    = (entry.boost_added    || []).map(k => `<span class="chip chip-boost">+${escHtml(k.keyword)}</span>`);
+      const penalize = (entry.penalize_added || []).map(k => `<span class="chip chip-penalize">−${escHtml(k.keyword)}</span>`);
+      const terms    = (entry.terms_added    || []).map(t => `<span class="chip chip-term">🔍 ${escHtml(t)}</span>`);
+      const chips = [...boost, ...penalize, ...terms].join('');
+      return `
+        <div class="insight-entry${entry.reverted ? ' reverted' : ''}">
+          <div class="insight-entry-header">
+            <span class="insight-entry-date">${formatRelative(entry.applied_at)}${entry.reverted ? ' · <em>reverted</em>' : ''}</span>
+            ${!entry.reverted ? `<button class="btn btn-secondary" style="font-size:12px;padding:3px 10px;" onclick="revertInsight(${i})">Revert</button>` : ''}
+          </div>
+          <div class="insight-entry-summary">${escHtml(entry.summary || '')}</div>
+          ${chips ? `<div class="insight-entry-chips">${chips}</div>` : ''}
+        </div>`;
+    }).join('');
+  } catch (e) { el.innerHTML = `<p style="color:#dc2626;">Failed to load history: ${escHtml(e.message)}</p>`; }
+}
+
+async function revertInsight(index) {
+  if (!confirm('Remove these keywords/terms from your profile?')) return;
+  try {
+    const r = await api('POST', `/api/insights/revert/${index}`);
+    alert(r.message);
+    await loadInsightsHistory();
+  } catch (e) { alert('Revert failed: ' + e.message); }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const resp = await fetch(path, opts);
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.detail || resp.statusText);
+  }
+  return resp.json();
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function notice(id, msg) {
+  const el = document.getElementById(id);
+  if (el) { el.textContent = msg; setTimeout(() => el.textContent = '', 4000); }
+}
+
+init();
+</script>
+</body>
+</html>
