@@ -7,9 +7,13 @@ from config import Settings
 
 log = logging.getLogger(__name__)
 
+GMAIL_SMTP_SERVER = "smtp.gmail.com"
+GMAIL_SMTP_PORT = 587
+SCORE_GREEN_THRESHOLD = 70
+
 SCORE_COLOR = {
-    "green":  "#22c55e",  # 70+
-    "yellow": "#eab308",  # 55-69
+    "green":  "#22c55e",
+    "yellow": "#eab308",
 }
 
 _JOB_CARD = """\
@@ -80,7 +84,7 @@ def build_email_html(jobs: list[dict], date_str: str, site_url: str = "") -> str
     cards = []
     for job in jobs:
         score = job.get("score", 0)
-        score_bg = SCORE_COLOR["green"] if score >= 70 else SCORE_COLOR["yellow"]
+        score_bg = SCORE_COLOR["green"] if score >= SCORE_GREEN_THRESHOLD else SCORE_COLOR["yellow"]
 
         badges = ""
         if job.get("is_remote"):
@@ -125,7 +129,7 @@ def send_email(settings: Settings, subject: str, html: str) -> str:
     msg.attach(MIMEText(html, "html"))
 
     log.info("Sending email to %s — %s", settings.gmail_to, subject)
-    with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+    with smtplib.SMTP(GMAIL_SMTP_SERVER, GMAIL_SMTP_PORT) as smtp:
         smtp.ehlo()
         smtp.starttls()
         smtp.login(settings.gmail_from, settings.gmail_app_password)
@@ -147,7 +151,7 @@ def send_plain_email(settings: Settings, subject: str, body: str,
     msg.attach(MIMEText(body, "plain"))
 
     log.info("Sending plain email to %s — %s", settings.gmail_to, subject)
-    with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+    with smtplib.SMTP(GMAIL_SMTP_SERVER, GMAIL_SMTP_PORT) as smtp:
         smtp.ehlo()
         smtp.starttls()
         smtp.login(settings.gmail_from, settings.gmail_app_password)

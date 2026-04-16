@@ -27,6 +27,15 @@ log = logging.getLogger(__name__)
 PROFILE_PATH = Path("/data/profile.yaml")
 JOBS_DB = Path("/data/jobs.db")
 
+MAX_RETRY_ATTEMPTS = 3
+BASE_RETRY_WAIT = 5          # seconds; actual wait = BASE_RETRY_WAIT * (2 ** attempt)
+JOB_DESCRIPTION_MAX_CHARS = 3000
+RATE_LIMIT_STATUS_CODES = (429, 502, 503)
+JOB_BOARDS = ["indeed", "linkedin"]
+INDEED_COUNTRY = "Canada"
+DEEP_RESULTS_PER_SITE = 50
+OPENROUTER_TIMEOUT = 60      # seconds
+
 SCORING_PROMPT = """\
 You are evaluating a job listing for a candidate. Score suitability 0-100 using:
 - Skills/experience match: 0-30 pts
@@ -64,17 +73,10 @@ def init_db() -> sqlite3.Connection:
             date_posted        TEXT,
             is_remote          INTEGER DEFAULT 0,
             job_type           TEXT,
-            description        TEXT,
             discovered_at      TEXT,
             user_rating        INTEGER DEFAULT NULL
         )
     """)
-    # Migrate existing DBs that predate user_rating column
-    try:
-        con.execute("ALTER TABLE jobs ADD COLUMN user_rating INTEGER DEFAULT NULL")
-        con.commit()
-    except sqlite3.OperationalError:
-        pass  # column already exists
     con.commit()
     return con
 
@@ -88,11 +90,11 @@ def insert_job(con: sqlite3.Connection, job: dict) -> None:
         INSERT OR IGNORE INTO jobs
             (id, title, employer, location, job_url, suitability_score,
              suitability_reason, date_posted, is_remote, job_type,
-             description, discovered_at)
+             discovered_at)
         VALUES
             (:id, :title, :employer, :location, :job_url, :suitability_score,
              :suitability_reason, :date_posted, :is_remote, :job_type,
-             :description, :discovered_at)
+             :discovered_at)
     """, job)
     con.commit()
 
@@ -110,10 +112,10 @@ def score_job(job: dict, profile: dict, settings) -> tuple[float, str]:
         title=job.get("title", ""),
         employer=job.get("employer", ""),
         location=job.get("location", ""),
-        description=(job.get("description") or "")[:3000],
+        description=(job.get("description") or "")[:JOB_DESCRIPTION_MAX_CHARS],
     )
 
-    for attempt in range(3):
+    for attempt in range(MAX_RETRY_ATTEMPTS):
         try:
             resp = requests.post(
                 "https://openrouter.ai/api/v1/chat/completions",
@@ -122,13 +124,13 @@ def score_job(job: dict, profile: dict, settings) -> tuple[float, str]:
                     "model": settings.openrouter_model,
                     "messages": [{"role": "user", "content": prompt}],
                 },
-                timeout=60,
+                timeout=OPENROUTER_TIMEOUT,
             )
 
-            if resp.status_code in (429, 502, 503):
-                wait = 5 * (2 ** attempt)  # 5s, 10s, 20s
-                log.warning("Scoring rate-limited (%s) for '%s', retrying in %ds (attempt %d/3)",
-                            resp.status_code, job.get("title"), wait, attempt + 1)
+            if resp.status_code in RATE_LIMIT_STATUS_CODES:
+                wait = BASE_RETRY_WAIT * (2 ** attempt)
+                log.warning("Scoring rate-limited (%s) for '%s', retrying in %ds (attempt %d/%d)",
+                            resp.status_code, job.get("title"), wait, attempt + 1, MAX_RETRY_ATTEMPTS)
                 time.sleep(wait)
                 continue
 
@@ -153,10 +155,10 @@ def score_job(job: dict, profile: dict, settings) -> tuple[float, str]:
             return float(score), reason
 
         except requests.exceptions.RequestException as e:
-            log.warning("Scoring request failed for '%s' (attempt %d/3): %s",
-                        job.get("title"), attempt + 1, e)
-            if attempt < 2:
-                time.sleep(5 * (2 ** attempt))
+            log.warning("Scoring request failed for '%s' (attempt %d/%d): %s",
+                        job.get("title"), attempt + 1, MAX_RETRY_ATTEMPTS, e)
+            if attempt < MAX_RETRY_ATTEMPTS - 1:
+                time.sleep(BASE_RETRY_WAIT * (2 ** attempt))
 
     return 0.0, "Scoring unavailable"
 
@@ -167,7 +169,7 @@ def run(profile: dict, settings, deep: bool = False) -> None:
     search = profile.get("search", {})
     terms = search.get("terms", [])
     locations = search.get("locations", ["Toronto, ON"])
-    results_per_site = search.get("results_per_site", 25) if not deep else 50
+    results_per_site = search.get("results_per_site", 25) if not deep else DEEP_RESULTS_PER_SITE
 
     if deep:
         log.info("=== Deep search mode — no time filter, results_wanted=%d ===", results_per_site)
@@ -185,11 +187,11 @@ def run(profile: dict, settings, deep: bool = False) -> None:
             log.info("Scraping: '%s' in %s", term, location)
             try:
                 df = scrape_jobs(
-                    site_name=["indeed", "linkedin"],
+                    site_name=JOB_BOARDS,
                     search_term=term,
                     location=location,
                     results_wanted=results_per_site,
-                    country_indeed="Canada",
+                    country_indeed=INDEED_COUNTRY,
                     **hours_old_param,
                 )
             except Exception as e:
@@ -211,7 +213,7 @@ def run(profile: dict, settings, deep: bool = False) -> None:
                     "date_posted": str(row.get("date_posted") or ""),
                     "is_remote": 1 if row.get("is_remote") else 0,
                     "job_type": str(row.get("job_type") or ""),
-                    "description": str(row.get("description") or ""),
+                    "description": str(row.get("description") or ""),  # used for scoring only
                     "discovered_at": datetime.now(timezone.utc).isoformat(),
                     "suitability_score": 0.0,
                     "suitability_reason": "",
@@ -219,6 +221,7 @@ def run(profile: dict, settings, deep: bool = False) -> None:
 
                 log.info("Scoring: %s @ %s", job["title"], job["employer"])
                 job["suitability_score"], job["suitability_reason"] = score_job(job, profile, settings)
+                del job["description"]  # not stored in DB
                 insert_job(con, job)
                 new_total += 1
 
@@ -232,6 +235,9 @@ def main() -> None:
     deep = os.environ.get("DEEP_SEARCH") == "1"
     log.info("=== Job Jigsaw Scraper starting%s ===", " (deep)" if deep else "")
     settings = get_settings()
+    if not PROFILE_PATH.exists():
+        log.error("profile.yaml not found at %s — set up your profile via the web UI first", PROFILE_PATH)
+        sys.exit(1)
     with open(PROFILE_PATH) as f:
         profile = yaml.safe_load(f)
     run(profile, settings, deep=deep)

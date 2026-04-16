@@ -29,6 +29,8 @@ log = logging.getLogger(__name__)
 
 PROFILE_PATH = Path("/data/profile.yaml")
 JOBS_DB      = Path("/data/jobs.db")
+GMAIL_IMAP_SERVER = "imap.gmail.com"
+OPENROUTER_TIMEOUT = 60
 
 
 def _decode_str(val) -> str:
@@ -74,7 +76,7 @@ def _fetch_reply(settings, proposal: dict) -> tuple[str, str] | None:
         return None
 
     try:
-        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail = imaplib.IMAP4_SSL(GMAIL_IMAP_SERVER)
         mail.login(settings.gmail_from, settings.gmail_app_password)
         mail.select("inbox")
 
@@ -115,7 +117,7 @@ def _call_openrouter(settings, prompt: str) -> str:
             "model": settings.openrouter_model,
             "messages": [{"role": "user", "content": prompt}],
         },
-        timeout=60,
+        timeout=OPENROUTER_TIMEOUT,
     )
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"].strip()

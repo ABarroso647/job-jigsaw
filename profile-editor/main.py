@@ -39,6 +39,8 @@ INSIGHTS_META = Path("/data/insights_meta.json")
 
 PAGE_SIZE = 25
 INSIGHTS_AUTO_THRESHOLD = 10  # new ratings/notes since last run triggers auto-update
+SCRAPER_URL = "http://scraper:3007"
+SCRAPER_REQUEST_TIMEOUT = 5
 
 SORT_MAP = {
     "score":      "suitability_score DESC, discovered_at DESC",
@@ -47,28 +49,62 @@ SORT_MAP = {
 }
 
 
-# ── Startup migration ─────────────────────────────────────────────────────────
+DEFAULT_PROFILE = {
+    "resume": "",
+    "description": "",
+    "search": {
+        "terms": [],
+        "locations": ["Toronto, ON"],
+        "hours_old": 24,
+        "results_per_site": 25,
+    },
+    "scoring": {
+        "boost": [],
+        "penalize": [],
+    },
+    "notification": {
+        "score_threshold": 60,
+        "max_jobs_per_email": 10,
+        "timezone": "America/Toronto",
+        "email_subject": "{count} new jobs today",
+        "telegram_message": "Found {count} jobs (top: {top_score})",
+    },
+}
 
-def _migrate_jobs_db() -> None:
-    """Add any missing columns to jobs.db. Safe to run on every startup."""
-    if not JOBS_DB.exists():
-        return
-    try:
-        con = sqlite3.connect(JOBS_DB)
-        existing = {row[1] for row in con.execute("PRAGMA table_info(jobs)").fetchall()}
-        new_cols = {
-            "user_rating": "INTEGER DEFAULT NULL",
-            "notes":       "TEXT DEFAULT NULL",
-            "hidden":      "INTEGER DEFAULT 0",
-            "is_applied":  "INTEGER DEFAULT 0",
-        }
-        for col, ddl in new_cols.items():
-            if col not in existing:
-                con.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")
-        con.commit()
-        con.close()
-    except Exception as e:
-        log.warning("DB migration failed: %s", e)
+
+# ── Startup initialization ────────────────────────────────────────────────────
+
+def _init_profile() -> None:
+    if not PROFILE_PATH.exists():
+        PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        write_profile(DEFAULT_PROFILE)
+        log.info("Created default profile.yaml at %s", PROFILE_PATH)
+
+
+def _init_jobs_db() -> None:
+    JOBS_DB.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(JOBS_DB)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            employer TEXT,
+            location TEXT,
+            job_url TEXT UNIQUE,
+            suitability_score INTEGER,
+            suitability_reason TEXT,
+            date_posted TEXT,
+            is_remote INTEGER,
+            job_type TEXT,
+            discovered_at TEXT,
+            user_rating INTEGER,
+            notes TEXT,
+            hidden INTEGER DEFAULT 0,
+            is_applied INTEGER DEFAULT 0
+        )
+    """)
+    con.commit()
+    con.close()
 
 
 # ── Insights meta ─────────────────────────────────────────────────────────────
@@ -104,7 +140,8 @@ def _count_rated_noted() -> int:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _migrate_jobs_db()
+    _init_profile()
+    _init_jobs_db()
     yield
 
 
@@ -620,12 +657,6 @@ def _generate_proposal(settings, profile: dict, extra_prompt: str = "") -> dict:
 
     content = _openrouter_call(settings, prompt, timeout=60)
 
-    if "```" in content:
-        content = content.split("```")[1]
-        if content.startswith("json"):
-            content = content[4:]
-        content = content.strip()
-
     try:
         result = json.loads(content)
     except Exception as e:
@@ -789,7 +820,7 @@ def revert_insight(index: int):
 @app.post("/api/run-scraper")
 def run_scraper():
     try:
-        resp = requests.post("http://scraper:3007/run", timeout=5)
+        resp = requests.post(f"{SCRAPER_URL}/run", timeout=SCRAPER_REQUEST_TIMEOUT)
         resp.raise_for_status()
         return {"ok": True, "message": "Scraper started — jobs will appear as they're scored."}
     except Exception as e:
@@ -799,7 +830,7 @@ def run_scraper():
 @app.post("/api/deep-search")
 def deep_search():
     try:
-        resp = requests.post("http://scraper:3007/run?deep=1", timeout=5)
+        resp = requests.post(f"{SCRAPER_URL}/run?deep=1", timeout=SCRAPER_REQUEST_TIMEOUT)
         resp.raise_for_status()
         return {"ok": True, "message": "Deep search started — finding all currently listed jobs. This may take a few minutes."}
     except Exception as e:

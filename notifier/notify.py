@@ -27,6 +27,9 @@ SENT_DB = Path("/data/sent_jobs.db")
 
 
 def load_profile() -> dict:
+    if not PROFILE_PATH.exists():
+        log.error("profile.yaml not found at %s — set up your profile via the web UI first", PROFILE_PATH)
+        sys.exit(1)
     with open(PROFILE_PATH) as f:
         return yaml.safe_load(f)
 
