@@ -77,12 +77,6 @@ def init_db() -> sqlite3.Connection:
             user_rating        INTEGER DEFAULT NULL
         )
     """)
-    # Migrate existing DBs that predate user_rating column
-    try:
-        con.execute("ALTER TABLE jobs ADD COLUMN user_rating INTEGER DEFAULT NULL")
-        con.commit()
-    except sqlite3.OperationalError:
-        pass  # column already exists
     con.commit()
     return con
 
