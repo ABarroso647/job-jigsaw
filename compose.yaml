@@ -1,0 +1,39 @@
+services:
+  scraper:
+    image: ghcr.io/abarroso647/job-jigsaw-scraper:latest
+    container_name: scraper
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    env_file:
+      - .env
+    environment:
+      - TZ=America/Toronto
+
+  notifier:
+    image: ghcr.io/abarroso647/job-jigsaw-notifier:latest
+    container_name: notifier
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    env_file:
+      - .env
+    environment:
+      - TZ=America/Toronto
+    depends_on:
+      - scraper
+
+  profile-editor:
+    image: ghcr.io/abarroso647/job-jigsaw-profile-editor:latest
+    container_name: profile-editor
+    restart: unless-stopped
+    ports:
+      - "3006:3006"
+    volumes:
+      - ./data:/data
+    env_file:
+      - .env
+    environment:
+      - TZ=America/Toronto
+    depends_on:
+      - scraper
