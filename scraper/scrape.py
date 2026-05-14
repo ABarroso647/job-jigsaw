@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Job Jigsaw Scraper — scrapes job boards, scores via OpenRouter, stores in jobs.db."""
+from __future__ import annotations
 
 import json
 import logging
@@ -35,16 +36,12 @@ JOB_BOARDS = ["indeed", "linkedin"]
 INDEED_COUNTRY = "Canada"
 DEEP_RESULTS_PER_SITE = 50
 OPENROUTER_TIMEOUT = 60      # seconds
+ENTITY_BOOST_CAP = 20        # max absolute delta from entity boost
 
 SCORING_PROMPT = """\
-You are evaluating a job listing for a candidate. Score suitability 0-100 using:
-- Skills/experience match: 0-30 pts
-- Experience level match: 0-25 pts
-- Location/remote alignment: 0-15 pts
-- Industry/domain fit: 0-15 pts
-- Career growth potential: 0-15 pts
+You are evaluating a job listing for a specific candidate.
 
-CANDIDATE PROFILE:
+CANDIDATE:
 {profile_json}
 
 JOB:
@@ -53,7 +50,17 @@ Employer: {employer}
 Location: {location}
 Description: {description}
 
-Return ONLY valid JSON: {{"score": <0-100>, "reason": "<1-2 sentences>"}}"""
+Score how well this job fits the candidate 0-100:
+- 90-100: exceptional fit on all dimensions
+- 70-89: strong fit, minor gaps
+- 50-69: partial fit, notable gaps
+- below 50: poor fit
+
+Use the full range. Avoid round numbers — 73 is better than 70.
+Score below 30 if the role requires credentials clearly absent from the resume, \
+or is in an unrelated field.
+
+Return ONLY valid JSON: {{"score": <integer 0-100>, "reason": "<1-2 sentences>"}}"""
 
 
 # ── DB ────────────────────────────────────────────────────────────────────────
@@ -77,6 +84,12 @@ def init_db() -> sqlite3.Connection:
             user_rating        INTEGER DEFAULT NULL
         )
     """)
+    # Migrations — idempotent, safe on existing DBs
+    for col, typedef in [("description", "TEXT"), ("language", "TEXT")]:
+        try:
+            con.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typedef}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
     con.commit()
     return con
 
@@ -90,13 +103,60 @@ def insert_job(con: sqlite3.Connection, job: dict) -> None:
         INSERT OR IGNORE INTO jobs
             (id, title, employer, location, job_url, suitability_score,
              suitability_reason, date_posted, is_remote, job_type,
-             discovered_at)
+             discovered_at, description, language)
         VALUES
             (:id, :title, :employer, :location, :job_url, :suitability_score,
              :suitability_reason, :date_posted, :is_remote, :job_type,
-             :discovered_at)
+             :discovered_at, :description, :language)
     """, job)
     con.commit()
+
+
+# ── Pre-filters ───────────────────────────────────────────────────────────────
+
+def location_allowed(location: str, is_remote: bool, allowed_regions: list[str] | None) -> bool:
+    """Return True if the job passes the location filter. Disabled when allowed_regions is empty/None."""
+    if not allowed_regions:
+        return True
+    if is_remote:
+        return True
+    loc_lower = location.lower()
+    return any(region.lower() in loc_lower for region in allowed_regions)
+
+
+def language_ok(text: str, require_language: str | None) -> bool:
+    """Return True if the job passes the language filter. Disabled when require_language is None."""
+    if not require_language:
+        return True
+    try:
+        from fast_langdetect import detect
+        result = detect(text[:600])
+        detected = (result.get("lang") or result.get("language") or "").lower()
+        return detected == require_language.lower()
+    except Exception as e:
+        log.warning("Language detection failed: %s — allowing job through", e)
+        return True
+
+
+# ── Entity boost ──────────────────────────────────────────────────────────────
+
+def apply_entity_boost(raw_score: float, description: str, scoring: dict) -> float:
+    """Apply deterministic keyword boost/penalize delta to the raw LLM score."""
+    desc_lower = description.lower()
+    delta = 0.0
+
+    for item in scoring.get("boost", []):
+        kw = (item.get("keyword") or "").lower()
+        if kw and kw in desc_lower:
+            delta += item.get("weight", 0)
+
+    for item in scoring.get("penalize", []):
+        kw = (item.get("keyword") or "").lower()
+        if kw and kw in desc_lower:
+            delta += item.get("weight", 0)  # weights are already negative
+
+    delta = max(-ENTITY_BOOST_CAP, min(ENTITY_BOOST_CAP, delta))
+    return max(0.0, min(100.0, raw_score + delta))
 
 
 # ── Scoring ───────────────────────────────────────────────────────────────────
@@ -105,6 +165,7 @@ def score_job(job: dict, profile: dict, settings) -> tuple[float, str]:
     profile_json = json.dumps({
         "resume": profile.get("resume", ""),
         "description": profile.get("description", ""),
+        **({"feedback": profile["feedback_summary"]} if profile.get("feedback_summary") else {}),
     }, ensure_ascii=False)
 
     prompt = SCORING_PROMPT.format(
@@ -123,6 +184,23 @@ def score_job(job: dict, profile: dict, settings) -> tuple[float, str]:
                 json={
                     "model": settings.openrouter_model,
                     "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3,
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "job_score",
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "score": {"type": "integer"},
+                                    "reason": {"type": "string"},
+                                },
+                                "required": ["score", "reason"],
+                                "additionalProperties": False,
+                            },
+                            "strict": True,
+                        },
+                    },
                 },
                 timeout=OPENROUTER_TIMEOUT,
             )
@@ -170,6 +248,9 @@ def run(profile: dict, settings, deep: bool = False) -> None:
     terms = search.get("terms", [])
     locations = search.get("locations", ["Toronto, ON"])
     results_per_site = search.get("results_per_site", 25) if not deep else DEEP_RESULTS_PER_SITE
+    allowed_regions = search.get("allowed_regions") or None
+    require_language = search.get("require_language") or None
+    scoring_config = profile.get("scoring", {})
 
     if deep:
         log.info("=== Deep search mode — no time filter, results_wanted=%d ===", results_per_site)
@@ -181,6 +262,8 @@ def run(profile: dict, settings, deep: bool = False) -> None:
     con = init_db()
     seen = known_urls(con)
     new_total = 0
+    skipped_location = 0
+    skipped_language = 0
 
     for term in terms:
         for location in locations:
@@ -204,29 +287,64 @@ def run(profile: dict, settings, deep: bool = False) -> None:
                     continue
                 seen.add(url)
 
+                is_remote = bool(row.get("is_remote"))
+                job_location = str(row.get("location") or "")
+                description = str(row.get("description") or "")
+
+                if not location_allowed(job_location, is_remote, allowed_regions):
+                    log.info("Skip (location): %s @ %s — %s", row.get("title"), row.get("company"), job_location)
+                    skipped_location += 1
+                    continue
+
+                if not language_ok(str(row.get("title") or "") + " " + description[:500], require_language):
+                    log.info("Skip (language): %s @ %s", row.get("title"), row.get("company"))
+                    skipped_language += 1
+                    continue
+
                 job = {
                     "id": str(uuid.uuid4()),
                     "title": str(row.get("title") or ""),
                     "employer": str(row.get("company") or ""),
-                    "location": str(row.get("location") or ""),
+                    "location": job_location,
                     "job_url": url,
                     "date_posted": str(row.get("date_posted") or ""),
-                    "is_remote": 1 if row.get("is_remote") else 0,
+                    "is_remote": 1 if is_remote else 0,
                     "job_type": str(row.get("job_type") or ""),
-                    "description": str(row.get("description") or ""),  # used for scoring only
+                    "description": description,
                     "discovered_at": datetime.now(timezone.utc).isoformat(),
                     "suitability_score": 0.0,
                     "suitability_reason": "",
+                    "language": None,
                 }
 
                 log.info("Scoring: %s @ %s", job["title"], job["employer"])
-                job["suitability_score"], job["suitability_reason"] = score_job(job, profile, settings)
-                del job["description"]  # not stored in DB
+                raw_score, reason = score_job(job, profile, settings)
+                adjusted_score = apply_entity_boost(raw_score, description, scoring_config)
+                delta = round(adjusted_score - raw_score)
+                if delta != 0:
+                    sign = "+" if delta > 0 else ""
+                    reason = f"{reason} [{sign}{delta}pts entity boost]"
+                    log.info("Entity boost: %s raw=%.0f adjusted=%.0f", job["title"], raw_score, adjusted_score)
+
+                job["suitability_score"] = adjusted_score
+                job["suitability_reason"] = reason
+                job["description"] = description[:JOB_DESCRIPTION_MAX_CHARS]
+
+                # Detect language for storage (reuse result if already computed above)
+                if require_language:
+                    try:
+                        from fast_langdetect import detect
+                        result = detect(job["title"] + " " + description[:500])
+                        job["language"] = (result.get("lang") or result.get("language") or "").lower()
+                    except Exception:
+                        pass
+
                 insert_job(con, job)
                 new_total += 1
 
     con.close()
-    log.info("Done — %d new jobs added.", new_total)
+    log.info("Done — %d new jobs added (%d skipped location, %d skipped language).",
+             new_total, skipped_location, skipped_language)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
