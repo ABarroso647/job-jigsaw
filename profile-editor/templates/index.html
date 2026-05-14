@@ -565,6 +565,9 @@
         <span id="insights-spinner" style="display:none" class="spinner spinner-dark"></span>
         AI Insights
       </button>
+      <button class="btn btn-secondary" onclick="clearUnsentJobs()" title="Delete all scraped jobs that haven't been emailed yet">
+        Clear unsent
+      </button>
     </div>
 
     <div id="insights-reminder">
@@ -1157,6 +1160,17 @@ async function loadInsights() {
     panel.style.display = 'block';
   } catch (e) { alert('Insights failed: ' + e.message); }
   finally { spinner.style.display = 'none'; }
+}
+
+async function clearUnsentJobs() {
+  const count = document.querySelectorAll('#hist-list .hist-row').length;
+  if (!confirm('Delete all scraped jobs that haven\'t been emailed yet? This cannot be undone.')) return;
+  try {
+    const res = await fetch('/api/jobs/clear-unsent', { method: 'DELETE' });
+    const data = await res.json();
+    alert(`Deleted ${data.deleted} unsent job${data.deleted !== 1 ? 's' : ''}.`);
+    loadHistory();
+  } catch (e) { alert('Failed: ' + e.message); }
 }
 
 // ── Insights tab ──────────────────────────────────────────────────────────────

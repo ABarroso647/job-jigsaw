@@ -564,6 +564,34 @@ def hide_job(body: HideRequest):
         raise HTTPException(500, str(e))
 
 
+@app.delete("/api/jobs/clear-unsent")
+def clear_unsent_jobs():
+    if not JOBS_DB.exists():
+        return {"deleted": 0}
+    try:
+        con = sqlite3.connect(JOBS_DB)
+        if SENT_DB.exists():
+            sent_con = sqlite3.connect(SENT_DB)
+            sent_urls = {r[0] for r in sent_con.execute("SELECT job_url FROM sent_jobs").fetchall()}
+            sent_con.close()
+        else:
+            sent_urls = set()
+        if sent_urls:
+            placeholders = ",".join("?" * len(sent_urls))
+            cur = con.execute(
+                f"DELETE FROM jobs WHERE job_url NOT IN ({placeholders})",
+                list(sent_urls),
+            )
+        else:
+            cur = con.execute("DELETE FROM jobs")
+        deleted = cur.rowcount
+        con.commit()
+        con.close()
+        return {"deleted": deleted}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @app.get("/api/insights-status")
 def insights_status():
     meta = _get_insights_meta()
