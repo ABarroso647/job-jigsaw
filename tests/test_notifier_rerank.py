@@ -12,7 +12,7 @@ for mod in ["config", "email_utils", "telegram"]:
         sys.modules[mod] = MagicMock()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'notifier'))
-from notify import fetch_unsent_jobs, rerank_with_jina, STALE_DATE_POSTED_DAYS
+from notify import fetch_unsent_jobs, rerank_with_jina, rerank_with_llm, rerank_jobs, STALE_DATE_POSTED_DAYS
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -215,17 +215,17 @@ def test_jina_rerank_filters_low_score():
     assert all(j["title"] != "Delivery Driver" for j in result)
 
 
-def test_jina_rerank_fallback_on_error():
+def test_jina_rerank_returns_none_on_error():
     with patch("notify.requests.post", side_effect=Exception("network error")):
         result = rerank_with_jina(MOCK_JOBS, BASE_PROFILE, MOCK_SETTINGS)
-    assert result == MOCK_JOBS
+    assert result is None
 
 
-def test_jina_disabled_when_no_key():
+def test_jina_returns_none_when_no_key():
     settings = MagicMock()
     settings.jina_api_key = ""
     result = rerank_with_jina(MOCK_JOBS, BASE_PROFILE, settings)
-    assert result == MOCK_JOBS
+    assert result is None
 
 
 def test_jina_uses_description_when_available():
@@ -267,3 +267,99 @@ def test_jina_includes_feedback_summary_in_query():
         call_args = mock_post.call_args
         query = call_args[1]["json"]["query"]
         assert "SaaS" in query
+
+
+# ── LLM re-ranker ─────────────────────────────────────────────────────────────
+
+MOCK_LLM_SETTINGS = MagicMock()
+MOCK_LLM_SETTINGS.jina_api_key = ""
+MOCK_LLM_SETTINGS.openrouter_api_key = "or-test-key"
+MOCK_LLM_SETTINGS.openrouter_model = "deepseek/deepseek-v4-flash"
+
+
+def _llm_response(ranked, scores):
+    m = MagicMock()
+    m.ok = True
+    m.raise_for_status = MagicMock()
+    m.json.return_value = {
+        "choices": [{"message": {"content": f'{{"ranked": {ranked}, "scores": {scores}}}'}}]
+    }
+    return m
+
+
+def test_llm_rerank_reorders():
+    with patch("notify.requests.post", return_value=_llm_response([2, 0, 1], [0.9, 0.8, 0.5])):
+        result = rerank_with_llm(MOCK_JOBS, BASE_PROFILE, MOCK_LLM_SETTINGS)
+    assert result[0]["title"] == "Delivery Driver"
+    assert result[1]["title"] == "Account Manager"
+    assert result[2]["title"] == "BDR"
+
+
+def test_llm_rerank_filters_low_score():
+    with patch("notify.requests.post", return_value=_llm_response([0, 1, 2], [0.9, 0.4, 0.1])):
+        result = rerank_with_llm(MOCK_JOBS, BASE_PROFILE, MOCK_LLM_SETTINGS)
+    assert len(result) == 2
+    assert result[0]["title"] == "Account Manager"
+
+
+def test_llm_rerank_returns_none_on_error():
+    with patch("notify.requests.post", side_effect=Exception("timeout")):
+        result = rerank_with_llm(MOCK_JOBS, BASE_PROFILE, MOCK_LLM_SETTINGS)
+    assert result is None
+
+
+def test_llm_disabled_when_no_key():
+    settings = MagicMock()
+    settings.openrouter_api_key = ""
+    result = rerank_with_llm(MOCK_JOBS, BASE_PROFILE, settings)
+    assert result is None
+
+
+def test_llm_includes_feedback_in_prompt():
+    profile_with_feedback = {**BASE_PROFILE, "feedback_summary": "Prefers remote SaaS."}
+    with patch("notify.requests.post", return_value=_llm_response([0], [0.9])) as mock_post:
+        rerank_with_llm([MOCK_JOBS[0]], profile_with_feedback, MOCK_LLM_SETTINGS)
+        prompt = mock_post.call_args[1]["json"]["messages"][0]["content"]
+        assert "Prefers remote SaaS" in prompt
+
+
+# ── rerank_jobs orchestrator ──────────────────────────────────────────────────
+
+def test_rerank_jobs_uses_jina_when_available():
+    jina_resp = MagicMock()
+    jina_resp.raise_for_status = MagicMock()
+    jina_resp.json.return_value = {"results": [
+        {"index": 2, "relevance_score": 0.9},
+        {"index": 0, "relevance_score": 0.8},
+        {"index": 1, "relevance_score": 0.5},
+    ]}
+    with patch("notify.requests.post", return_value=jina_resp):
+        result = rerank_jobs(MOCK_JOBS, BASE_PROFILE, MOCK_SETTINGS)
+    assert result[0]["title"] == "Delivery Driver"
+
+
+def test_rerank_jobs_falls_back_to_llm_when_jina_fails():
+    settings = MagicMock()
+    settings.jina_api_key = "bad-key"
+    settings.openrouter_api_key = "or-key"
+    settings.openrouter_model = "deepseek/deepseek-v4-flash"
+
+    call_count = {"n": 0}
+
+    def fake_post(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise Exception("Jina auth failed")
+        return _llm_response([1, 0, 2], [0.9, 0.7, 0.4])
+
+    with patch("notify.requests.post", side_effect=fake_post):
+        result = rerank_jobs(MOCK_JOBS, BASE_PROFILE, settings)
+    assert result[0]["title"] == "BDR"
+
+
+def test_rerank_jobs_returns_score_order_when_both_fail():
+    settings = MagicMock()
+    settings.jina_api_key = ""
+    settings.openrouter_api_key = ""
+    result = rerank_jobs(MOCK_JOBS, BASE_PROFILE, settings)
+    assert result == MOCK_JOBS

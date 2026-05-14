@@ -2,6 +2,7 @@
 """Job Jigsaw Notifier — fetches scored jobs, sends email digest + Telegram ping."""
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import sys
@@ -113,10 +114,10 @@ def fetch_unsent_jobs(profile: dict, sent_con: sqlite3.Connection) -> list[dict]
 
 # ── Jina Reranker ─────────────────────────────────────────────────────────────
 
-def rerank_with_jina(jobs: list[dict], profile: dict, settings) -> list[dict]:
-    """Re-rank jobs using Jina Reranker v3. Falls back to original order on any failure."""
+def rerank_with_jina(jobs: list[dict], profile: dict, settings) -> list[dict] | None:
+    """Re-rank jobs using Jina Reranker v3. Returns None when skipped or on failure."""
     if not getattr(settings, "jina_api_key", "") or not jobs:
-        return jobs
+        return None
 
     notif = profile.get("notification", {})
     rerank_min_score = notif.get("rerank_min_score", 0.3)
@@ -168,8 +169,93 @@ def rerank_with_jina(jobs: list[dict], profile: dict, settings) -> list[dict]:
         return reranked
 
     except Exception as e:
-        log.warning("Jina reranker failed, using original order: %s", e)
-        return jobs
+        log.warning("Jina reranker failed: %s", e)
+        return None
+
+
+def rerank_with_llm(jobs: list[dict], profile: dict, settings) -> list[dict] | None:
+    """Re-rank jobs via OpenRouter LLM. Returns None when skipped or on failure."""
+    if not getattr(settings, "openrouter_api_key", "") or not jobs:
+        return None
+
+    notif = profile.get("notification", {})
+    rerank_min_score = notif.get("rerank_min_score", 0.3)
+
+    resume = profile.get("resume", "")[:800]
+    feedback = profile.get("feedback_summary", "")
+    candidate = f"{resume}\n{feedback}".strip()
+
+    job_lines = []
+    for i, job in enumerate(jobs):
+        desc = (job.get("description") or job.get("reason") or "")[:300]
+        job_lines.append(
+            f'{i}. {job.get("title")} at {job.get("company")} ({job.get("location")}): {desc}'
+        )
+
+    prompt = (
+        "Rank these job postings by relevance to this candidate. "
+        "Return ONLY valid JSON with no explanation.\n\n"
+        f"CANDIDATE:\n{candidate}\n\n"
+        "JOBS:\n" + "\n".join(job_lines) + "\n\n"
+        'Return: {"ranked": [indices best→worst], "scores": [relevance 0-1 per ranked job]}'
+    )
+
+    try:
+        resp = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.openrouter_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": settings.openrouter_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"]
+        if "```" in content:
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        result = json.loads(content.strip())
+        ranked_indices = result.get("ranked", [])
+        scores = result.get("scores", [])
+
+        reranked = []
+        for pos, idx in enumerate(ranked_indices):
+            if not isinstance(idx, int) or idx < 0 or idx >= len(jobs):
+                continue
+            score = scores[pos] if pos < len(scores) else 1.0
+            if score < rerank_min_score:
+                log.info("LLM re-ranker dropped job (score %.2f): %s", score, jobs[idx].get("title"))
+                continue
+            reranked.append(jobs[idx])
+
+        if not reranked:
+            return None
+
+        log.info("LLM re-ranked %d → %d jobs", len(jobs), len(reranked))
+        return reranked
+
+    except Exception as e:
+        log.warning("LLM re-ranker failed: %s", e)
+        return None
+
+
+def rerank_jobs(jobs: list[dict], profile: dict, settings) -> list[dict]:
+    """Jina first, OpenRouter LLM as fallback, score order as last resort."""
+    result = rerank_with_jina(jobs, profile, settings)
+    if result is not None:
+        return result
+    result = rerank_with_llm(jobs, profile, settings)
+    if result is not None:
+        log.info("Used LLM re-ranker (Jina unavailable)")
+        return result
+    log.info("No re-ranker available — using score order")
+    return jobs
 
 
 def mark_sent(con: sqlite3.Connection, jobs: list[dict]) -> None:
@@ -199,7 +285,7 @@ def main() -> None:
         sent_con.close()
         return
 
-    jobs = rerank_with_jina(candidates, profile, settings)
+    jobs = rerank_jobs(candidates, profile, settings)
     jobs = jobs[:max_jobs]
 
     if not jobs:
