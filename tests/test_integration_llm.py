@@ -166,10 +166,11 @@ CASES = [
             ),
         },
         "mid": {
-            "title": "Medical Office Administrator",
+            "title": "Medical Device Sales Representative",
             "description": (
-                "Manage patient scheduling, billing, and EMR records for a busy family medicine clinic. "
-                "Healthcare background an asset but not required. Strong organizational skills needed."
+                "Sell ICU monitoring equipment and ventilators to hospital purchasing teams and clinical staff. "
+                "Conduct product demonstrations in critical care units, support nurses and physicians during trials. "
+                "Clinical nursing or respiratory therapy background strongly preferred. Territory: GTA hospitals."
             ),
         },
         "weak": {
@@ -204,11 +205,11 @@ CASES = [
             ),
         },
         "mid": {
-            "title": "IT Project Manager",
+            "title": "Sales Engineer — Cloud Infrastructure",
             "description": (
-                "Coordinate software delivery across engineering teams. "
-                "Maintain roadmaps, run sprints, manage stakeholder expectations. "
-                "PMP preferred. Technical background a strong asset. 5+ years project management."
+                "Demo and sell Kubernetes-based cloud infrastructure products to engineering teams. "
+                "Build proof-of-concept deployments using Python, AWS, and containerized microservices. "
+                "Requires strong technical background; 3+ years software engineering or DevOps experience."
             ),
         },
         "weak": {
