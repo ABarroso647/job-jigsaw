@@ -1170,6 +1170,7 @@ async function clearUnsentJobs() {
     const data = await res.json();
     alert(`Deleted ${data.deleted} unsent job${data.deleted !== 1 ? 's' : ''}.`);
     loadHistory();
+    loadPreview();
   } catch (e) { alert('Failed: ' + e.message); }
 }
 
