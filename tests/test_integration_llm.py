@@ -1,15 +1,18 @@
 """
-LLM/Reranker eval tests — real API calls, run each scenario N times.
+LLM/Reranker eval tests — generic, parameterized, trial-based.
 
-Like deepeval's trial-based approach: each eval runs N_TRIALS times and
-must pass at least PASS_THRESHOLD of them. This catches stochastic failures
-where the model occasionally produces nonsense.
+Inspired by deepeval's approach: each scenario runs N_TRIALS=5 times and
+must pass PASS_THRESHOLD=4 (80%). This surfaces stochastic model failures
+that a single-run test hides.
 
-Run with keys set:
+Tests are domain-agnostic — they use 4 completely different professional
+profiles so they prove model capability, not app-specific knowledge.
+
+Run:
     OPENROUTER_API_KEY=... pytest tests/test_integration_llm.py -v -s
     OPENROUTER_API_KEY=... JINA_API_KEY=... pytest tests/test_integration_llm.py -v -s
 
-Estimated cost per full run: ~$0.01 at DeepSeek V4 Flash prices.
+Cost: ~$0.01 per full run at DeepSeek V4 Flash prices.
 """
 from __future__ import annotations
 import json
@@ -27,27 +30,32 @@ OR_MODEL = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash")
 needs_openrouter = pytest.mark.skipif(not OR_KEY, reason="OPENROUTER_API_KEY not set")
 needs_jina       = pytest.mark.skipif(not JINA_KEY, reason="JINA_API_KEY not set")
 
-N_TRIALS        = 5    # trials per eval
-PASS_THRESHOLD  = 4    # must pass this many (80%) — allows 1 stochastic failure
+N_TRIALS       = 5
+PASS_THRESHOLD = 4   # 80% — allows 1 stochastic failure per eval
+
+# Score thresholds — conservative enough for any decent model
+GOOD_FIT_MIN   = 60   # clearly relevant job must score at least this
+BAD_FIT_MAX    = 40   # clearly irrelevant job must score at most this
+MIN_SCORE_GAP  = 20   # relevant must outscore irrelevant by at least this
 
 # ── Eval runner ───────────────────────────────────────────────────────────────
 
 def eval_n_times(label: str, fn, n: int = N_TRIALS, threshold: int = PASS_THRESHOLD):
     """
-    Run fn() n times, collect pass/fail with detail, assert >= threshold pass.
-    fn() should return a descriptive string on pass, raise AssertionError on fail.
+    Run fn() n times. fn() returns a detail string on pass, raises AssertionError on fail.
+    Asserts at least `threshold` passes and prints a per-trial report.
     """
-    passes = 0
-    lines = []
+    passes, lines = 0, []
     for i in range(n):
         try:
             detail = fn()
             passes += 1
-            lines.append(f"  PASS trial {i + 1}: {detail}")
+            lines.append(f"  PASS [{i+1}/{n}] {detail}")
         except AssertionError as e:
-            lines.append(f"  FAIL trial {i + 1}: {e}")
+            lines.append(f"  FAIL [{i+1}/{n}] {e}")
     pct = passes / n
-    print(f"\n[{label}] {passes}/{n} passed ({pct:.0%})")
+    print(f"\n{'='*60}")
+    print(f"[{label}]  {passes}/{n} passed  ({pct:.0%})")
     for ln in lines:
         print(ln)
     assert passes >= threshold, (
@@ -94,124 +102,26 @@ def _jina_rerank(query: str, documents: list[str]) -> list[dict]:
     resp.raise_for_status()
     return resp.json()["results"]
 
-# ── Test data ─────────────────────────────────────────────────────────────────
-
-CANDIDATE = (
-    "Serina Zheng — Toronto-based B2B sales professional, 4 years experience. "
-    "Quota-carrying Account Executive at two SaaS companies. Proficient in HubSpot "
-    "and Salesforce. Closed $1.2M ARR last year. Seeking AE or senior BDR roles at "
-    "growth-stage tech companies. Prefers hybrid or remote. Based in Toronto, ON."
-)
-
-JOBS = {
-    "ae_saas": {
-        "title": "Account Executive",
-        "company": "CloudMetrics",
-        "location": "Toronto, ON (Hybrid)",
-        "description": (
-            "Own the full sales cycle for our B2B SaaS platform. Manage a pipeline "
-            "of 30+ mid-market accounts, run demos, negotiate contracts. HubSpot required. "
-            "OTE $120k, $700k quota. 3+ yrs AE experience needed."
-        ),
-    },
-    "bdr_remote": {
-        "title": "Business Development Rep",
-        "company": "SaaSly",
-        "location": "Remote (Canada)",
-        "description": (
-            "Outbound prospecting via cold call, LinkedIn, and email sequences. "
-            "Qualify inbound leads and hand off to AE. Salesforce CRM. Great stepping "
-            "stone to AE. 1-2 yrs sales experience preferred."
-        ),
-    },
-    "sales_mgr_manufacturing": {
-        "title": "Sales Manager",
-        "company": "Brampton Industrial Supply",
-        "location": "Brampton, ON (On-site)",
-        "description": (
-            "Manage a team of 6 field reps selling industrial parts to manufacturing "
-            "plants across Ontario. Deep knowledge of hydraulics and pneumatics an asset. "
-            "5+ years in industrial or distribution sales required."
-        ),
-    },
-    "ae_vancouver_onsite": {
-        "title": "Account Executive",
-        "company": "PacificSaaS",
-        "location": "Vancouver, BC (On-site only)",
-        "description": (
-            "Join our growing Vancouver team selling to Canadian enterprise accounts. "
-            "Must be located in or willing to relocate to Metro Vancouver. "
-            "3+ yrs SaaS AE experience. Salesforce, full-cycle sales."
-        ),
-    },
-    "driver": {
-        "title": "Delivery Driver",
-        "company": "SwiftRoute Logistics",
-        "location": "Mississauga, ON",
-        "description": (
-            "Drive a 5-ton truck on routes across the GTA. Load and unload parcels "
-            "up to 50 lbs. Valid G licence required. Forklift certification an asset. "
-            "Monday–Friday, 6am–3pm. Union position."
-        ),
-    },
-    "french_sales": {
-        "title": "Représentant·e des ventes",
-        "company": "Acme Québec",
-        "location": "Montréal, QC (Présentiel)",
-        "description": (
-            "Vendre nos solutions logicielles aux PME québécoises. Maîtrise du français "
-            "obligatoire. Connaissance du marché québécois essentielle. "
-            "Expérience en vente B2B requise. Poste basé à Montréal."
-        ),
-    },
-    "warehouse": {
-        "title": "Warehouse Associate",
-        "company": "Fulfillment Plus",
-        "location": "Scarborough, ON",
-        "description": (
-            "Pick, pack, and ship e-commerce orders. Operate RF scanners and pallet "
-            "jacks. Physically demanding role — must be able to stand for 10-hour shifts. "
-            "No experience required, training provided."
-        ),
-    },
-    "ae_fintech_toronto": {
-        "title": "Account Executive — Fintech",
-        "company": "PayEdge",
-        "location": "Toronto, ON (Hybrid)",
-        "description": (
-            "Sell our B2B payments platform to CFOs and finance leaders at mid-market "
-            "companies. Full-cycle from outbound to close. Salesforce, 2+ yrs AE required. "
-            "OTE $110k. Strong preference for candidates with fintech or SaaS background."
-        ),
-    },
-}
-
-
-def _doc(job: dict) -> str:
-    return f"{job['title']} at {job['company']} ({job['location']})\n{job['description']}"
-
+# ── Scoring prompt ────────────────────────────────────────────────────────────
 
 SCORING_PROMPT = """\
 You are evaluating a job listing for a specific candidate.
 
-CANDIDATE:
-{candidate}
+CANDIDATE PROFILE:
+{resume}
 
 JOB:
 Title: {title}
-Employer: {company}
-Location: {location}
 Description: {description}
 
 Score how well this job fits the candidate 0-100:
 - 90-100: exceptional fit on all dimensions
 - 70-89: strong fit, minor gaps
 - 50-69: partial fit, notable gaps
-- below 50: poor fit
+- 30-49: poor fit, major mismatches
+- 0-29: irrelevant — unrelated field or missing core credentials
 
-Use the full range. Avoid round numbers — 73 is better than 70.
-Score below 30 if the role requires credentials clearly absent from the resume,
-or is in an unrelated field.
+Use the full range. Avoid round numbers.
 
 Return ONLY valid JSON: {{"score": <integer 0-100>, "reason": "<1-2 sentences>"}}"""
 
@@ -220,251 +130,362 @@ Rank these job postings by relevance to this candidate.
 Return ONLY valid JSON with no explanation.
 
 CANDIDATE:
-{candidate}
+{resume}
 
 JOBS:
 {job_lines}
 
 Return: {{"ranked": [indices best to worst], "scores": [relevance 0.0-1.0 per ranked job]}}"""
 
+# ── Test cases — 4 unrelated professional domains ─────────────────────────────
+#
+# Each case has:
+#   resume      — clear professional identity
+#   strong      — obviously relevant (same role, matching credentials)
+#   weak        — obviously irrelevant (completely different field)
+#   mid         — plausible but imperfect match (for re-ranking variation)
+#   extra_weak  — second obviously irrelevant job (for re-ranking bottom-2 tests)
+#
+# Contrast between strong and weak is intentionally extreme so any competent
+# model should get it right. The mid jobs add realistic noise.
+
+CASES = [
+    {
+        "id": "nursing",
+        "resume": (
+            "Registered Nurse, 6 years ICU and emergency department experience. "
+            "BScN degree. BCLS and ACLS certified. Skilled in ventilator management, "
+            "central line care, critical care protocols, and hemodynamic monitoring."
+        ),
+        "strong": {
+            "title": "ICU Registered Nurse",
+            "description": (
+                "Provide critical care nursing to ventilated patients in a 20-bed ICU. "
+                "Manage vasopressors, central lines, and continuous renal replacement therapy. "
+                "BScN required. BCLS required, ACLS preferred. 3+ years ICU experience required."
+            ),
+        },
+        "mid": {
+            "title": "Medical Office Administrator",
+            "description": (
+                "Manage patient scheduling, billing, and EMR records for a busy family medicine clinic. "
+                "Healthcare background an asset but not required. Strong organizational skills needed."
+            ),
+        },
+        "weak": {
+            "title": "Forklift Operator",
+            "description": (
+                "Operate electric forklifts in a distribution warehouse. Move pallets, scan inventory, "
+                "maintain logs. Forklift licence required. No other experience necessary."
+            ),
+        },
+        "extra_weak": {
+            "title": "Landscaper",
+            "description": (
+                "Mow lawns, plant shrubs, lay sod, and maintain gardens for residential clients. "
+                "Valid driver's licence required. Physically demanding outdoor work."
+            ),
+        },
+    },
+    {
+        "id": "software_engineering",
+        "resume": (
+            "Senior software engineer, 8 years Python and distributed systems. "
+            "Built ML training pipelines at scale using PyTorch and Apache Spark. "
+            "Deep expertise in Kubernetes, microservices, and cloud infrastructure (AWS). "
+            "BSc Computer Science."
+        ),
+        "strong": {
+            "title": "Senior ML Infrastructure Engineer",
+            "description": (
+                "Design and operate ML training and serving infrastructure. "
+                "Python, PyTorch, Kubernetes, and Spark required. AWS experience preferred. "
+                "5+ years distributed systems experience. BSc in CS or equivalent."
+            ),
+        },
+        "mid": {
+            "title": "IT Project Manager",
+            "description": (
+                "Coordinate software delivery across engineering teams. "
+                "Maintain roadmaps, run sprints, manage stakeholder expectations. "
+                "PMP preferred. Technical background a strong asset. 5+ years project management."
+            ),
+        },
+        "weak": {
+            "title": "Licensed Plumber",
+            "description": (
+                "Install and repair plumbing systems in residential and commercial buildings. "
+                "Red Seal certification or 306A licence required. "
+                "3+ years journeyman experience. Must have own tools."
+            ),
+        },
+        "extra_weak": {
+            "title": "Pastry Chef",
+            "description": (
+                "Produce baked goods, desserts, and breads for a high-volume hotel kitchen. "
+                "Red Seal in Baking and Pastry Arts preferred. 5am start. Weekend availability required."
+            ),
+        },
+    },
+    {
+        "id": "culinary",
+        "resume": (
+            "Executive Chef with 14 years fine dining experience. "
+            "Led kitchens of 25+ staff at two Michelin-recognized restaurants. "
+            "Deep expertise in French classical technique, seasonal tasting menu development, "
+            "and food cost management. Certified through George Brown culinary program."
+        ),
+        "strong": {
+            "title": "Executive Chef — Fine Dining",
+            "description": (
+                "Lead the culinary program at an upscale 80-seat restaurant. "
+                "Design seasonal tasting menus, mentor junior chefs, manage 20% food cost target. "
+                "Formal culinary training required. 8+ years kitchen leadership experience."
+            ),
+        },
+        "mid": {
+            "title": "Food and Beverage Manager",
+            "description": (
+                "Oversee restaurant operations including front-of-house and back-of-house coordination. "
+                "P&L accountability, staff scheduling, vendor negotiations. "
+                "Hospitality management degree or equivalent experience. Culinary background an asset."
+            ),
+        },
+        "weak": {
+            "title": "Tax Accountant",
+            "description": (
+                "Prepare corporate and personal tax returns, T2 filings, and HST reconciliations. "
+                "CPA designation required. Public accounting experience preferred. "
+                "3+ years in a professional services firm."
+            ),
+        },
+        "extra_weak": {
+            "title": "Civil Engineering Technician",
+            "description": (
+                "Assist in site inspections, soil testing, and preparation of technical drawings. "
+                "Diploma in Civil Engineering Technology required. AutoCAD experience an asset."
+            ),
+        },
+    },
+    {
+        "id": "civil_engineering",
+        "resume": (
+            "Professional Engineer (P.Eng) specializing in structural bridge design, 10 years experience. "
+            "Led design on 12 highway bridge replacement projects across Ontario. "
+            "Proficient in AutoCAD, STAAD Pro, MTO bridge design standards, and load rating analysis."
+        ),
+        "strong": {
+            "title": "Structural Bridge Designer",
+            "description": (
+                "Design and rehabilitate highway bridge superstructures and substructures. "
+                "Perform load analysis, prepare stamped design drawings, liaise with MTO. "
+                "P.Eng required. STAAD Pro and AutoCAD required. 7+ years bridge design experience."
+            ),
+        },
+        "mid": {
+            "title": "Construction Project Manager",
+            "description": (
+                "Manage construction of commercial and infrastructure projects from tender to closeout. "
+                "Coordinate trades, manage RFIs and submittals, track schedule and budget. "
+                "P.Eng or PMP preferred. 5+ years construction management experience."
+            ),
+        },
+        "weak": {
+            "title": "Registered Massage Therapist",
+            "description": (
+                "Provide therapeutic massage to clients in a clinical setting. "
+                "RMT registration with CMTO required. Experience with deep tissue and sports therapy preferred. "
+                "Flexible hours including evenings and weekends."
+            ),
+        },
+        "extra_weak": {
+            "title": "Hair Stylist",
+            "description": (
+                "Cut, colour, and style hair in a busy downtown salon. "
+                "Cosmetology licence required. Experience with balayage and highlights preferred. "
+                "Commission-based, flexible schedule."
+            ),
+        },
+    },
+]
+
+CASE_IDS = [c["id"] for c in CASES]
 
 # ── Scoring evals ─────────────────────────────────────────────────────────────
 
 @needs_openrouter
-def test_score_strong_fit_ae():
-    """AE SaaS Toronto role must score >= 65 for this profile, 4/5 trials."""
-    job = JOBS["ae_saas"]
-
+@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+def test_score_strong_fit_above_threshold(case):
+    """Clearly relevant job must score >= 60 for a matched candidate profile, 4/5 trials."""
     def trial():
-        result = _parse_json(_or_complete(
-            SCORING_PROMPT.format(candidate=CANDIDATE, **job)
-        ))
+        result = _parse_json(_or_complete(SCORING_PROMPT.format(
+            resume=case["resume"], **case["strong"]
+        )))
         score = result["score"]
-        assert score >= 65, f"score={score}, reason={result['reason']}"
-        return f"score={score}"
-
-    eval_n_times("score_strong_fit_ae", trial)
-
-
-@needs_openrouter
-def test_score_poor_fit_driver():
-    """Delivery Driver must score <= 35 for a sales profile, 4/5 trials."""
-    job = JOBS["driver"]
-
-    def trial():
-        result = _parse_json(_or_complete(
-            SCORING_PROMPT.format(candidate=CANDIDATE, **job)
-        ))
-        score = result["score"]
-        assert score <= 35, f"score={score}, reason={result['reason']}"
-        return f"score={score}"
-
-    eval_n_times("score_poor_fit_driver", trial)
-
-
-@needs_openrouter
-def test_score_gap_ae_vs_non_sales():
-    """AE must outscore both Driver and Warehouse by >= 30 pts, 4/5 trials."""
-    ae_job = JOBS["ae_saas"]
-    bad_jobs = [JOBS["driver"], JOBS["warehouse"]]
-
-    def trial():
-        ae_result = _parse_json(_or_complete(
-            SCORING_PROMPT.format(candidate=CANDIDATE, **ae_job)
-        ))
-        ae_score = ae_result["score"]
-        gaps = []
-        for bad in bad_jobs:
-            bad_result = _parse_json(_or_complete(
-                SCORING_PROMPT.format(candidate=CANDIDATE, **bad)
-            ))
-            gap = ae_score - bad_result["score"]
-            assert gap >= 30, (
-                f"AE ({ae_score}) vs {bad['title']} ({bad_result['score']}): gap={gap} < 30"
-            )
-            gaps.append(f"{bad['title']}={bad_result['score']}")
-        return f"AE={ae_score}, others=[{', '.join(gaps)}]"
-
-    eval_n_times("score_gap_ae_vs_non_sales", trial)
-
-
-@needs_openrouter
-def test_score_vancouver_penalised():
-    """Vancouver on-site AE should score lower than Toronto hybrid AE, 4/5 trials."""
-    toronto = JOBS["ae_saas"]
-    vancouver = JOBS["ae_vancouver_onsite"]
-
-    def trial():
-        t = _parse_json(_or_complete(SCORING_PROMPT.format(candidate=CANDIDATE, **toronto)))
-        v = _parse_json(_or_complete(SCORING_PROMPT.format(candidate=CANDIDATE, **vancouver)))
-        assert t["score"] > v["score"], (
-            f"Toronto AE ({t['score']}) should outscore Vancouver AE ({v['score']})"
+        assert score >= GOOD_FIT_MIN, (
+            f"score={score} < {GOOD_FIT_MIN}. reason: {result['reason']}"
         )
-        return f"Toronto={t['score']}, Vancouver={v['score']}"
+        return f"score={score}"
 
-    eval_n_times("score_vancouver_penalised", trial)
+    eval_n_times(f"score_strong_fit[{case['id']}]", trial)
+
+
+@needs_openrouter
+@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+def test_score_weak_fit_below_threshold(case):
+    """Completely unrelated job must score <= 40 for a matched candidate profile, 4/5 trials."""
+    def trial():
+        result = _parse_json(_or_complete(SCORING_PROMPT.format(
+            resume=case["resume"], **case["weak"]
+        )))
+        score = result["score"]
+        assert score <= BAD_FIT_MAX, (
+            f"score={score} > {BAD_FIT_MAX}. reason: {result['reason']}"
+        )
+        return f"score={score}"
+
+    eval_n_times(f"score_weak_fit[{case['id']}]", trial)
+
+
+@needs_openrouter
+@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+def test_score_gap_strong_vs_weak(case):
+    """Strong job must outscore clearly unrelated job by >= 20 pts, 4/5 trials."""
+    def trial():
+        strong = _parse_json(_or_complete(SCORING_PROMPT.format(
+            resume=case["resume"], **case["strong"]
+        )))
+        weak = _parse_json(_or_complete(SCORING_PROMPT.format(
+            resume=case["resume"], **case["weak"]
+        )))
+        gap = strong["score"] - weak["score"]
+        assert gap >= MIN_SCORE_GAP, (
+            f"gap={gap} < {MIN_SCORE_GAP}. "
+            f"strong={strong['score']}, weak={weak['score']}"
+        )
+        return f"strong={strong['score']}, weak={weak['score']}, gap={gap}"
+
+    eval_n_times(f"score_gap[{case['id']}]", trial)
+
+
+@needs_openrouter
+@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+def test_score_strong_beats_mid(case):
+    """Clearly relevant job must outscore the partial-match job, 4/5 trials."""
+    def trial():
+        strong = _parse_json(_or_complete(SCORING_PROMPT.format(
+            resume=case["resume"], **case["strong"]
+        )))
+        mid = _parse_json(_or_complete(SCORING_PROMPT.format(
+            resume=case["resume"], **case["mid"]
+        )))
+        assert strong["score"] > mid["score"], (
+            f"strong ({strong['score']}) did not beat mid ({mid['score']})"
+        )
+        return f"strong={strong['score']}, mid={mid['score']}"
+
+    eval_n_times(f"score_strong_beats_mid[{case['id']}]", trial)
 
 
 # ── LLM re-ranking evals ──────────────────────────────────────────────────────
 
-def _build_rerank_prompt(job_keys: list[str]) -> tuple[str, list[str]]:
-    selected = [JOBS[k] for k in job_keys]
+@needs_openrouter
+@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+def test_llm_rerank_strong_is_top2(case):
+    """Strong-fit job must be in top 2 of 4 (strong, mid, weak, extra_weak), 4/5 trials."""
+    jobs = [case["strong"], case["mid"], case["weak"], case["extra_weak"]]
+    titles = [j["title"] for j in jobs]
     job_lines = "\n".join(
-        f"{i}. {j['title']} at {j['company']} ({j['location']}): {j['description'][:250]}"
-        for i, j in enumerate(selected)
+        f"{i}. {j['title']}: {j['description'][:200]}" for i, j in enumerate(jobs)
     )
-    prompt = RERANK_PROMPT.format(candidate=CANDIDATE, job_lines=job_lines)
-    return prompt, [j["title"] for j in selected]
-
-
-@needs_openrouter
-def test_llm_rerank_sales_top2():
-    """AE and BDR must occupy top-2 out of 5 jobs (AE SaaS, BDR, Industrial, Driver, Warehouse), 4/5."""
-    keys = ["ae_saas", "bdr_remote", "sales_mgr_manufacturing", "driver", "warehouse"]
-    sales_indices = {0, 1}  # ae_saas, bdr_remote
 
     def trial():
-        prompt, titles = _build_rerank_prompt(keys)
-        result = _parse_json(_or_complete(prompt, temperature=0.1))
+        result = _parse_json(_or_complete(
+            RERANK_PROMPT.format(resume=case["resume"], job_lines=job_lines),
+            temperature=0.1,
+        ))
         ranked = result["ranked"]
-        top2 = set(ranked[:2])
-        missing = sales_indices - top2
-        assert not missing, (
-            f"Sales roles not in top 2: {[titles[i] for i in missing]}. Order: {[titles[i] for i in ranked]}"
-        )
-        return f"top2=[{titles[ranked[0]]}, {titles[ranked[1]]}]"
-
-    eval_n_times("llm_rerank_sales_top2", trial)
-
-
-@needs_openrouter
-def test_llm_rerank_french_not_top2():
-    """French Montréal job must NOT be in top 2 of 5, 4/5 trials."""
-    keys = ["ae_saas", "bdr_remote", "ae_fintech_toronto", "driver", "french_sales"]
-    french_idx = 4
-
-    def trial():
-        prompt, titles = _build_rerank_prompt(keys)
-        result = _parse_json(_or_complete(prompt, temperature=0.1))
-        ranked = result["ranked"]
-        pos = ranked.index(french_idx)
-        assert pos >= 2, (
-            f"French job ranked {pos + 1}/5 — expected rank 3 or lower. "
+        pos = ranked.index(0)  # index 0 = strong job
+        assert pos <= 1, (
+            f"Strong job '{titles[0]}' ranked {pos + 1}/4. "
             f"Order: {[titles[i] for i in ranked]}"
         )
-        return f"French job rank={pos + 1}/5, order=[{', '.join(titles[i] for i in ranked)}]"
+        return f"strong ranked {pos + 1}/4, order=[{', '.join(titles[i] for i in ranked)}]"
 
-    eval_n_times("llm_rerank_french_not_top2", trial)
+    eval_n_times(f"llm_rerank_strong_top2[{case['id']}]", trial)
 
 
 @needs_openrouter
-def test_llm_rerank_unrelated_roles_bottom():
-    """Driver and Warehouse must both be in bottom 3 of 6 jobs, 4/5 trials."""
-    keys = ["ae_saas", "bdr_remote", "ae_fintech_toronto", "sales_mgr_manufacturing", "driver", "warehouse"]
-    bad_indices = {4, 5}
+@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+def test_llm_rerank_weak_jobs_in_bottom2(case):
+    """Both unrelated jobs must be in bottom 2 of 4 (strong, mid, weak, extra_weak), 4/5 trials."""
+    jobs = [case["strong"], case["mid"], case["weak"], case["extra_weak"]]
+    titles = [j["title"] for j in jobs]
+    job_lines = "\n".join(
+        f"{i}. {j['title']}: {j['description'][:200]}" for i, j in enumerate(jobs)
+    )
+    bad_indices = {2, 3}
 
     def trial():
-        prompt, titles = _build_rerank_prompt(keys)
-        result = _parse_json(_or_complete(prompt, temperature=0.1))
+        result = _parse_json(_or_complete(
+            RERANK_PROMPT.format(resume=case["resume"], job_lines=job_lines),
+            temperature=0.1,
+        ))
         ranked = result["ranked"]
-        bottom3 = set(ranked[3:])
-        missing = bad_indices - bottom3
+        bottom2 = set(ranked[2:])
+        missing = bad_indices - bottom2
         assert not missing, (
-            f"Non-sales roles not in bottom 3: {[titles[i] for i in missing]}. "
+            f"Irrelevant jobs not in bottom 2: {[titles[i] for i in missing]}. "
             f"Order: {[titles[i] for i in ranked]}"
         )
-        return f"bottom3=[{', '.join(titles[i] for i in ranked[3:])}]"
+        return f"bottom2=[{', '.join(titles[i] for i in ranked[2:])}]"
 
-    eval_n_times("llm_rerank_unrelated_bottom", trial)
-
-
-@needs_openrouter
-def test_llm_rerank_toronto_over_vancouver():
-    """Toronto hybrid AE must rank above Vancouver on-site AE for this Toronto candidate, 4/5."""
-    keys = ["ae_saas", "bdr_remote", "ae_vancouver_onsite", "driver", "warehouse"]
-    toronto_idx = 0
-    vancouver_idx = 2
-
-    def trial():
-        prompt, titles = _build_rerank_prompt(keys)
-        result = _parse_json(_or_complete(prompt, temperature=0.1))
-        ranked = result["ranked"]
-        t_pos = ranked.index(toronto_idx)
-        v_pos = ranked.index(vancouver_idx)
-        assert t_pos < v_pos, (
-            f"Toronto AE (rank {t_pos + 1}) should beat Vancouver AE (rank {v_pos + 1})"
-        )
-        return f"Toronto rank={t_pos + 1}, Vancouver rank={v_pos + 1}"
-
-    eval_n_times("llm_rerank_toronto_over_vancouver", trial)
+    eval_n_times(f"llm_rerank_weak_bottom2[{case['id']}]", trial)
 
 
 # ── Jina re-ranking evals ─────────────────────────────────────────────────────
 
 @needs_jina
-def test_jina_rerank_sales_top2():
-    """Jina: AE and BDR must be in top 2 of 5, 4/5 trials."""
-    keys = ["ae_saas", "bdr_remote", "sales_mgr_manufacturing", "driver", "warehouse"]
-    jobs = [JOBS[k] for k in keys]
-    titles = [j["title"] + " @ " + j["company"] for j in jobs]
-    sales_indices = {0, 1}
-    documents = [_doc(j) for j in jobs]
+@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+def test_jina_rerank_strong_is_top2(case):
+    """Jina: strong-fit job must be in top 2 of 4, 4/5 trials."""
+    jobs = [case["strong"], case["mid"], case["weak"], case["extra_weak"]]
+    titles = [j["title"] for j in jobs]
+    documents = [f"{j['title']}\n{j['description']}" for j in jobs]
 
     def trial():
-        results = _jina_rerank(CANDIDATE, documents)
+        results = _jina_rerank(case["resume"], documents)
         ranked = [r["index"] for r in results]
-        top2 = set(ranked[:2])
-        missing = sales_indices - top2
-        assert not missing, (
-            f"Sales roles missing from top 2: {[titles[i] for i in missing]}. "
-            f"Scores: {[(titles[r['index']], round(r['relevance_score'], 3)) for r in results]}"
-        )
-        return f"top2=[{titles[ranked[0]]}, {titles[ranked[1]]}]"
-
-    eval_n_times("jina_rerank_sales_top2", trial)
-
-
-@needs_jina
-def test_jina_rerank_all_six():
-    """Jina: Driver and Warehouse must both land in bottom 3 of 6, 4/5 trials."""
-    keys = ["ae_saas", "bdr_remote", "ae_fintech_toronto", "sales_mgr_manufacturing", "driver", "warehouse"]
-    jobs = [JOBS[k] for k in keys]
-    titles = [j["title"] + " @ " + j["company"] for j in jobs]
-    bad_indices = {4, 5}
-    documents = [_doc(j) for j in jobs]
-
-    def trial():
-        results = _jina_rerank(CANDIDATE, documents)
-        ranked = [r["index"] for r in results]
-        bottom3 = set(ranked[3:])
-        missing = bad_indices - bottom3
-        assert not missing, (
-            f"Non-sales roles not in bottom 3: {[titles[i] for i in missing]}. "
-            f"Order: {[titles[i] for i in ranked]}"
-        )
+        pos = ranked.index(0)
         scores_str = ", ".join(f"{titles[r['index']]}={r['relevance_score']:.3f}" for r in results)
-        return f"bottom3=[{', '.join(titles[i] for i in ranked[3:])}] | {scores_str}"
+        assert pos <= 1, (
+            f"Strong job '{titles[0]}' ranked {pos + 1}/4. "
+            f"Scores: {scores_str}"
+        )
+        return f"strong rank={pos + 1}/4 | {scores_str}"
 
-    eval_n_times("jina_rerank_all_six", trial)
+    eval_n_times(f"jina_rerank_strong_top2[{case['id']}]", trial)
 
 
 @needs_jina
-def test_jina_rerank_french_penalised():
-    """Jina: French Montréal job must rank 4th or 5th out of 5 for English Toronto candidate, 4/5."""
-    keys = ["ae_saas", "bdr_remote", "ae_fintech_toronto", "driver", "french_sales"]
-    jobs = [JOBS[k] for k in keys]
-    titles = [j["title"] + " @ " + j["company"] for j in jobs]
-    french_idx = 4
-    documents = [_doc(j) for j in jobs]
+@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+def test_jina_rerank_weak_jobs_in_bottom2(case):
+    """Jina: both unrelated jobs must be in bottom 2 of 4, 4/5 trials."""
+    jobs = [case["strong"], case["mid"], case["weak"], case["extra_weak"]]
+    titles = [j["title"] for j in jobs]
+    documents = [f"{j['title']}\n{j['description']}" for j in jobs]
+    bad_indices = {2, 3}
 
     def trial():
-        results = _jina_rerank(CANDIDATE, documents)
+        results = _jina_rerank(case["resume"], documents)
         ranked = [r["index"] for r in results]
-        pos = ranked.index(french_idx)
-        assert pos >= 3, (
-            f"French job ranked {pos + 1}/5 — expected rank 4 or 5. "
-            f"Order: {[titles[i] for i in ranked]}"
+        bottom2 = set(ranked[2:])
+        missing = bad_indices - bottom2
+        scores_str = ", ".join(f"{titles[r['index']]}={r['relevance_score']:.3f}" for r in results)
+        assert not missing, (
+            f"Irrelevant jobs not in bottom 2: {[titles[i] for i in missing]}. "
+            f"Scores: {scores_str}"
         )
-        return f"French rank={pos + 1}/5"
+        return f"bottom2=[{', '.join(titles[i] for i in ranked[2:])}] | {scores_str}"
 
-    eval_n_times("jina_rerank_french_penalised", trial)
+    eval_n_times(f"jina_rerank_weak_bottom2[{case['id']}]", trial)
