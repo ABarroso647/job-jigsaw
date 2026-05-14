@@ -190,14 +190,18 @@ def query_jobs(threshold: int, max_jobs: int) -> list[dict]:
               AND (user_rating IS NULL OR user_rating != -1)
               AND (hidden = 0 OR hidden IS NULL)
             ORDER BY suitability_score DESC
-            LIMIT ?
-        """, (threshold, max_jobs)).fetchall()
+        """, (threshold,)).fetchall()
+        sent_urls = set(_sent_map().keys())
         results = []
         for r in rows:
+            if r["job_url"] in sent_urls:
+                continue
             job = dict(r)
             job["company"] = job.pop("employer", "")
             job["score"] = job.pop("suitability_score", 0)
             results.append(job)
+            if len(results) >= max_jobs:
+                break
         return results
     except Exception as e:
         log.error("jobs.db query failed: %s", e)
