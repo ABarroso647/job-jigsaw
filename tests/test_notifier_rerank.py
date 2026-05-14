@@ -85,11 +85,10 @@ BASE_PROFILE = {
 
 # ── Staleness filter — date_posted primary signal ─────────────────────────────
 
-def test_staleness_known_date_recent(monkeypatch):
+def test_staleness_known_date_recent():
     job = {**BASE_JOB, "date_posted": date_days_ago(5)}
     jobs_con = make_jobs_db([job])
     sent_con = make_sent_db()
-    monkeypatch.setattr("notify.JOBS_DB", ":memory:")
 
     with patch("sqlite3.connect") as mock_connect:
         mock_connect.return_value = jobs_con
@@ -97,7 +96,7 @@ def test_staleness_known_date_recent(monkeypatch):
     assert len(results) == 1
 
 
-def test_staleness_known_date_old(monkeypatch):
+def test_staleness_known_date_old():
     job = {**BASE_JOB, "date_posted": date_days_ago(20)}  # 20 days > 14
     jobs_con = make_jobs_db([job])
     sent_con = make_sent_db()
@@ -108,7 +107,7 @@ def test_staleness_known_date_old(monkeypatch):
     assert len(results) == 0
 
 
-def test_staleness_nan_date_recent_discovered(monkeypatch):
+def test_staleness_nan_date_recent_discovered():
     job = {**BASE_JOB, "date_posted": "nan", "discovered_at": days_ago(2)}
     jobs_con = make_jobs_db([job])
     sent_con = make_sent_db()
@@ -119,7 +118,7 @@ def test_staleness_nan_date_recent_discovered(monkeypatch):
     assert len(results) == 1
 
 
-def test_staleness_nan_date_old_discovered(monkeypatch):
+def test_staleness_nan_date_old_discovered():
     job = {**BASE_JOB, "date_posted": "nan", "discovered_at": days_ago(10)}  # > 7 day fallback
     jobs_con = make_jobs_db([job])
     sent_con = make_sent_db()
@@ -130,7 +129,7 @@ def test_staleness_nan_date_old_discovered(monkeypatch):
     assert len(results) == 0
 
 
-def test_staleness_empty_date_recent_discovered(monkeypatch):
+def test_staleness_empty_date_recent_discovered():
     job = {**BASE_JOB, "date_posted": "", "discovered_at": days_ago(1)}
     jobs_con = make_jobs_db([job])
     sent_con = make_sent_db()
@@ -141,7 +140,7 @@ def test_staleness_empty_date_recent_discovered(monkeypatch):
     assert len(results) == 1
 
 
-def test_disliked_job_excluded(monkeypatch):
+def test_disliked_job_excluded():
     job = {**BASE_JOB, "user_rating": -1, "date_posted": date_days_ago(1)}
     jobs_con = make_jobs_db([job])
     sent_con = make_sent_db()
@@ -152,7 +151,7 @@ def test_disliked_job_excluded(monkeypatch):
     assert len(results) == 0
 
 
-def test_already_sent_excluded(monkeypatch):
+def test_already_sent_excluded():
     job = {**BASE_JOB, "date_posted": date_days_ago(1)}
     jobs_con = make_jobs_db([job])
     sent_con = make_sent_db(sent_urls=[job["job_url"]])
