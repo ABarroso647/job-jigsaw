@@ -320,7 +320,10 @@ def run(profile: dict, settings, deep: bool = False) -> None:
                 log.info("Scoring: %s @ %s", job["title"], job["employer"])
                 raw_score, reason = score_job(job, profile, settings)
                 adjusted_score = apply_entity_boost(raw_score, description, scoring_config)
-                if adjusted_score != raw_score:
+                delta = round(adjusted_score - raw_score)
+                if delta != 0:
+                    sign = "+" if delta > 0 else ""
+                    reason = f"{reason} [{sign}{delta}pts entity boost]"
                     log.info("Entity boost: %s raw=%.0f adjusted=%.0f", job["title"], raw_score, adjusted_score)
 
                 job["suitability_score"] = adjusted_score
