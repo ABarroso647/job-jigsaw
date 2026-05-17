@@ -3,11 +3,7 @@
 .env.local
 
 # Runtime data — contains personal info and secrets
-data/*.db
-data/profile.yaml
-data/pending_proposal.json
-data/insights_meta.json
-data/insights_history.json
+data/*
 
 # Python
 __pycache__/

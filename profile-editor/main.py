@@ -362,9 +362,9 @@ def analyse(body: AnalyseRequest) -> AnalyseResponse:
         raise HTTPException(400, "OPENROUTER_API_KEY not set")
 
     prompt = f"""You are a job search assistant. Based on the resume and description below, suggest:
-1. 8-12 job title search terms for job boards
-2. 15-20 boost keywords with weights (1-20, higher = more relevant)
-3. 5-10 penalize keywords with weights (-10 to -50, things that disqualify this candidate)
+1. 8-12 job title search terms to search on job boards (e.g. "Business Development Representative")
+2. 15-20 boost keywords with weights (1-20): things that should appear in a GOOD job listing for this candidate — relevant industries, skills, tools, and role types they excel at
+3. 5-10 penalize keywords with weights (-10 to -50): things that appear in job LISTINGS that would make the role a BAD fit — wrong industry, wrong seniority level, unrelated role types. Do NOT penalize based on anything in the candidate's own resume or background.
 
 Return ONLY valid JSON:
 {{
@@ -578,6 +578,34 @@ def hide_job(body: HideRequest):
         con.commit()
         con.close()
         return {"ok": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.delete("/api/jobs/clear-unsent")
+def clear_unsent_jobs():
+    if not JOBS_DB.exists():
+        return {"deleted": 0}
+    try:
+        con = sqlite3.connect(JOBS_DB)
+        if SENT_DB.exists():
+            sent_con = sqlite3.connect(SENT_DB)
+            sent_urls = {r[0] for r in sent_con.execute("SELECT job_url FROM sent_jobs").fetchall()}
+            sent_con.close()
+        else:
+            sent_urls = set()
+        if sent_urls:
+            placeholders = ",".join("?" * len(sent_urls))
+            cur = con.execute(
+                f"DELETE FROM jobs WHERE job_url NOT IN ({placeholders})",
+                list(sent_urls),
+            )
+        else:
+            cur = con.execute("DELETE FROM jobs")
+        deleted = cur.rowcount
+        con.commit()
+        con.close()
+        return {"deleted": deleted}
     except Exception as e:
         raise HTTPException(500, str(e))
 
