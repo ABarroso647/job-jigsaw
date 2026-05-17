@@ -180,7 +180,9 @@ def _sent_map() -> dict[str, str]:
         return {}
 
 
-def query_jobs(threshold: int, max_jobs: int) -> list[dict]:
+STALE_DATE_POSTED_DAYS = 14
+
+def query_jobs(threshold: int, max_jobs: int, max_job_age_days: int = 7) -> list[dict]:
     if not JOBS_DB.exists():
         return []
     con = None
@@ -194,15 +196,30 @@ def query_jobs(threshold: int, max_jobs: int) -> list[dict]:
             WHERE suitability_score >= ?
               AND (user_rating IS NULL OR user_rating != -1)
               AND (hidden = 0 OR hidden IS NULL)
+              AND (
+                (
+                  date_posted IS NOT NULL AND date_posted != 'nan' AND date_posted != ''
+                  AND date(date_posted) >= date('now', '-' || ? || ' days')
+                )
+                OR
+                (
+                  (date_posted IS NULL OR date_posted = 'nan' OR date_posted = '')
+                  AND discovered_at >= datetime('now', '-' || ? || ' days')
+                )
+              )
             ORDER BY suitability_score DESC
-            LIMIT ?
-        """, (threshold, max_jobs)).fetchall()
+        """, (threshold, STALE_DATE_POSTED_DAYS, max_job_age_days)).fetchall()
+        sent_urls = set(_sent_map().keys())
         results = []
         for r in rows:
+            if r["job_url"] in sent_urls:
+                continue
             job = dict(r)
             job["company"] = job.pop("employer", "")
             job["score"] = job.pop("suitability_score", 0)
             results.append(job)
+            if len(results) >= max_jobs:
+                break
         return results
     except Exception as e:
         log.error("jobs.db query failed: %s", e)
@@ -354,9 +371,9 @@ def analyse(body: AnalyseRequest) -> AnalyseResponse:
         raise HTTPException(400, "OPENROUTER_API_KEY not set")
 
     prompt = f"""You are a job search assistant. Based on the resume and description below, suggest:
-1. 8-12 job title search terms for job boards
-2. 15-20 boost keywords with weights (1-20, higher = more relevant)
-3. 5-10 penalize keywords with weights (-10 to -50, things that disqualify this candidate)
+1. 8-12 job title search terms to search on job boards (e.g. "Business Development Representative")
+2. 15-20 boost keywords with weights (1-20): things that should appear in a GOOD job listing for this candidate — relevant industries, skills, tools, and role types they excel at
+3. 5-10 penalize keywords with weights (-10 to -50): things that appear in job LISTINGS that would make the role a BAD fit — wrong industry, wrong seniority level, unrelated role types. Do NOT penalize based on anything in the candidate's own resume or background.
 
 Return ONLY valid JSON:
 {{
@@ -408,7 +425,8 @@ def preview() -> PreviewResponse:
     try:
         profile = read_profile()
         notif = profile["notification"]
-        jobs = query_jobs(notif["score_threshold"], notif["max_jobs_per_email"])
+        jobs = query_jobs(notif["score_threshold"], notif["max_jobs_per_email"],
+                          notif.get("max_job_age_days", 7))
         return PreviewResponse(jobs=jobs, count=len(jobs))
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -569,6 +587,34 @@ def hide_job(body: HideRequest):
         con.commit()
         con.close()
         return {"ok": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.delete("/api/jobs/clear-unsent")
+def clear_unsent_jobs():
+    if not JOBS_DB.exists():
+        return {"deleted": 0}
+    try:
+        con = sqlite3.connect(JOBS_DB)
+        if SENT_DB.exists():
+            sent_con = sqlite3.connect(SENT_DB)
+            sent_urls = {r[0] for r in sent_con.execute("SELECT job_url FROM sent_jobs").fetchall()}
+            sent_con.close()
+        else:
+            sent_urls = set()
+        if sent_urls:
+            placeholders = ",".join("?" * len(sent_urls))
+            cur = con.execute(
+                f"DELETE FROM jobs WHERE job_url NOT IN ({placeholders})",
+                list(sent_urls),
+            )
+        else:
+            cur = con.execute("DELETE FROM jobs")
+        deleted = cur.rowcount
+        con.commit()
+        con.close()
+        return {"deleted": deleted}
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -933,7 +979,8 @@ def test_send() -> TestSendResponse:
     profile = read_profile()
     notif = profile["notification"]
 
-    jobs = query_jobs(notif["score_threshold"], notif["max_jobs_per_email"])
+    jobs = query_jobs(notif["score_threshold"], notif["max_jobs_per_email"],
+                      notif.get("max_job_age_days", 7))
     if not jobs:
         return TestSendResponse(ok=False, message="No jobs above threshold — nothing to send.")
 
