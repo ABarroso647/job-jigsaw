@@ -57,6 +57,8 @@ DEFAULT_PROFILE = {
         "locations": ["Toronto, ON"],
         "hours_old": 24,
         "results_per_site": 25,
+        "require_language": None,   # None = disabled; "en" = English only
+        "allowed_regions": None,    # None = disabled; list of strings = whitelist
     },
     "scoring": {
         "boost": [],
@@ -68,6 +70,9 @@ DEFAULT_PROFILE = {
         "timezone": "America/Toronto",
         "email_subject": "{count} new jobs today",
         "telegram_message": "Found {count} jobs (top: {top_score})",
+        "max_job_age_days": 7,      # fallback age when date_posted is unknown
+        "rerank_candidates": 30,    # how many to feed Jina before trimming to max_jobs
+        "rerank_min_score": 0.3,    # drop jobs below this Jina relevance score
     },
 }
 
@@ -305,6 +310,10 @@ class HistorySummarizeRequest(BaseModel):
 class ApplyRequest(BaseModel):
     job_url: str
     applied: bool
+
+
+class FeedbackSummaryResponse(BaseModel):
+    summary: str
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -719,6 +728,33 @@ def _generate_proposal(settings, profile: dict, extra_prompt: str = "") -> dict:
     }
 
 
+def _generate_feedback_summary(rows, settings) -> str:
+    """Build a natural-language feedback summary from rated/noted job rows."""
+    if not rows:
+        return ""
+    lines = []
+    for r in rows:
+        rating_map = {1: "liked", -1: "disliked"}
+        rating_str = rating_map.get(r["user_rating"], "noted")
+        line = f'- {rating_str}: "{r["title"]}" at {r["employer"]}'
+        if r["notes"]:
+            line += f' — Note: "{r["notes"]}"'
+        lines.append(line)
+
+    prompt = (
+        "Based on these job ratings and notes, summarize in 2-3 sentences what this "
+        "candidate likes and dislikes about job postings. Be specific about patterns "
+        "(company types, role types, requirements, industries).\n\n"
+        f"FEEDBACK:\n{chr(10).join(lines)}\n\n"
+        'Return ONLY valid JSON: {"summary": "<2-3 sentences>"}'
+    )
+    content = _openrouter_call(settings, prompt, timeout=60)
+    try:
+        return json.loads(content).get("summary", "")
+    except Exception:
+        return content[:500]
+
+
 def _proposal_email_body(proposal: dict) -> str:
     boost    = [i["keyword"] for i in proposal.get("boost_add", [])]
     penalize = [i["keyword"] for i in proposal.get("penalize_add", [])]
@@ -731,6 +767,43 @@ def _proposal_email_body(proposal: dict) -> str:
         lines.append("(No changes proposed)")
     lines += ["", "Reply APPROVE to apply, REJECT to discard, or tell me what to change."]
     return "\n".join(lines)
+
+
+@app.post("/api/profile/refresh-feedback", response_model=FeedbackSummaryResponse)
+def refresh_feedback_summary() -> FeedbackSummaryResponse:
+    """Generate a feedback_summary from recent ratings/notes and store it in profile.yaml."""
+    settings = get_settings()
+    if not settings.openrouter_api_key:
+        raise HTTPException(400, "OPENROUTER_API_KEY not set")
+
+    rows = []
+    if JOBS_DB.exists():
+        try:
+            con = sqlite3.connect(JOBS_DB)
+            con.row_factory = sqlite3.Row
+            rows = con.execute("""
+                SELECT title, employer, user_rating, notes
+                FROM jobs
+                WHERE discovered_at >= datetime('now', '-90 days')
+                  AND (user_rating IS NOT NULL OR (notes IS NOT NULL AND notes != ''))
+                ORDER BY discovered_at DESC
+                LIMIT 100
+            """).fetchall()
+            con.close()
+        except Exception as e:
+            log.error("jobs.db feedback query failed: %s", e)
+
+    summary = _generate_feedback_summary(rows, settings)
+
+    try:
+        profile = read_profile()
+        profile["feedback_summary"] = summary
+        profile["feedback_summary_updated_at"] = datetime.now(timezone.utc).isoformat()
+        write_profile(profile)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+    return FeedbackSummaryResponse(summary=summary)
 
 
 @app.post("/api/history/summarize")

@@ -498,6 +498,69 @@
       </div>
     </div>
 
+    <div class="card">
+      <h2>Job filters</h2>
+      <p style="font-size:13px;color:#6b7280;margin-bottom:16px;">
+        Optional pre-filters applied before scoring. Leave blank to disable.
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+        <div>
+          <label>Language filter <span style="font-weight:400;color:#9ca3af;">(e.g. en — blank = disabled)</span></label>
+          <input type="text" id="require-language" placeholder="en">
+        </div>
+        <div></div>
+      </div>
+      <div>
+        <label>Allowed regions <span style="font-weight:400;color:#9ca3af;">(blank list = no filter)</span></label>
+        <div id="allowed-regions-list" class="tag-list" style="margin-bottom:8px;"></div>
+        <div class="row">
+          <div style="flex:1">
+            <input type="text" id="new-region" placeholder="e.g. Ontario"
+                   onkeydown="if(event.key==='Enter')addAllowedRegion()">
+          </div>
+          <button class="btn btn-secondary" onclick="addAllowedRegion()">Add</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Notification tuning</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
+        <div>
+          <label>Max job age fallback (days)</label>
+          <input type="number" id="max-job-age-days" min="1" max="90" value="7" style="width:100%">
+        </div>
+        <div>
+          <label>Re-rank candidates</label>
+          <input type="number" id="rerank-candidates" min="5" max="100" value="30" style="width:100%">
+        </div>
+        <div>
+          <label>Re-rank min score (0–1)</label>
+          <input type="number" id="rerank-min-score" min="0" max="1" step="0.05" value="0.3" style="width:100%">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Feedback summary</h2>
+      <p style="font-size:13px;color:#6b7280;margin-bottom:12px;">
+        Auto-generated summary of your likes/dislikes — used by the scorer and re-ranker.
+      </p>
+      <textarea id="feedback-summary" rows="3" readonly
+                style="background:#f9fafb;color:#374151;resize:none;"
+                placeholder="No summary yet — click Refresh to generate one."></textarea>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:10px;">
+        <button class="btn btn-secondary" onclick="refreshFeedbackSummary()">
+          <span id="feedback-spinner" style="display:none" class="spinner spinner-dark"></span>
+          Refresh Summary
+        </button>
+        <span id="feedback-updated" style="font-size:12px;color:#9ca3af;"></span>
+        <span id="feedback-outdated" style="display:none;font-size:12px;color:#d97706;font-weight:500;">
+          Summary outdated (&gt;7 days)
+        </span>
+      </div>
+    </div>
+
     <div class="save-bar">
       <span class="save-status" id="settings-save-status"></span>
       <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
@@ -664,6 +727,23 @@ function populateAll() {
   document.getElementById('remote-toggle').checked = search.remote !== false;
   document.getElementById('location-primary').value = (search.locations || ['Toronto, ON'])[0];
   renderSearchTerms(search.terms || []);
+  document.getElementById('require-language').value = search.require_language || '';
+  renderAllowedRegions(search.allowed_regions || []);
+  const notif2 = profile.notification || {};
+  document.getElementById('max-job-age-days').value  = notif2.max_job_age_days  ?? 7;
+  document.getElementById('rerank-candidates').value = notif2.rerank_candidates ?? 30;
+  document.getElementById('rerank-min-score').value  = notif2.rerank_min_score  ?? 0.3;
+  // feedback summary
+  document.getElementById('feedback-summary').value = profile.feedback_summary || '';
+  const updatedAt = profile.feedback_summary_updated_at;
+  if (updatedAt) {
+    const d = new Date(updatedAt);
+    document.getElementById('feedback-updated').textContent = 'Last updated ' + d.toLocaleDateString();
+    const ageMs = Date.now() - d.getTime();
+    if (ageMs > 7 * 24 * 60 * 60 * 1000) {
+      document.getElementById('feedback-outdated').style.display = 'inline';
+    }
+  }
 }
 
 function populateBoostTable() {
@@ -738,6 +818,53 @@ function readSearchTerms() {
     .map(t => t.childNodes[0].textContent.trim()).filter(Boolean);
 }
 
+// ── Allowed regions ───────────────────────────────────────────────────────────
+function renderAllowedRegions(regions) {
+  const list = document.getElementById('allowed-regions-list');
+  list.innerHTML = '';
+  for (const r of regions) {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.innerHTML = `${escHtml(r)}<button class="remove-tag" onclick="this.closest('.tag').remove()">×</button>`;
+    list.appendChild(tag);
+  }
+}
+function addAllowedRegion() {
+  const input = document.getElementById('new-region');
+  const val = input.value.trim();
+  if (!val) return;
+  const tag = document.createElement('span');
+  tag.className = 'tag';
+  tag.innerHTML = `${escHtml(val)}<button class="remove-tag" onclick="this.closest('.tag').remove()">×</button>`;
+  document.getElementById('allowed-regions-list').appendChild(tag);
+  input.value = '';
+}
+function readAllowedRegions() {
+  return [...document.querySelectorAll('#allowed-regions-list .tag')]
+    .map(t => t.childNodes[0].textContent.trim()).filter(Boolean);
+}
+
+// ── Feedback summary ──────────────────────────────────────────────────────────
+async function refreshFeedbackSummary() {
+  const btn = document.querySelector('[onclick="refreshFeedbackSummary()"]');
+  const spinner = document.getElementById('feedback-spinner');
+  spinner.style.display = 'inline-block';
+  btn.disabled = true;
+  try {
+    const result = await api('POST', '/api/profile/refresh-feedback');
+    document.getElementById('feedback-summary').value = result.summary || '(no feedback found yet)';
+    document.getElementById('feedback-updated').textContent = 'Last updated ' + new Date().toLocaleDateString();
+    document.getElementById('feedback-outdated').style.display = 'none';
+    profile.feedback_summary = result.summary;
+    profile.feedback_summary_updated_at = new Date().toISOString();
+  } catch (e) {
+    alert('Failed to refresh summary: ' + e.message);
+  } finally {
+    spinner.style.display = 'none';
+    btn.disabled = false;
+  }
+}
+
 // ── Save actions ──────────────────────────────────────────────────────────────
 async function saveResume() {
   profile.resume = document.getElementById('resume').value;
@@ -753,11 +880,18 @@ async function saveSettings() {
   const loc = document.getElementById('location-primary').value.trim();
   profile.search.locations = loc ? [loc, 'Canada'] : ['Toronto, ON', 'Canada'];
   profile.search.remote    = document.getElementById('remote-toggle').checked;
+  const lang = document.getElementById('require-language').value.trim();
+  profile.search.require_language = lang || null;
+  const regions = readAllowedRegions();
+  profile.search.allowed_regions = regions.length > 0 ? regions : null;
   profile.notification = profile.notification || {};
   profile.notification.score_threshold    = parseInt(document.getElementById('threshold').value);
   profile.notification.max_jobs_per_email = parseInt(document.getElementById('max-jobs').value);
   const [h, m] = document.getElementById('send-time').value.split(':');
-  profile.notification.schedule = `${parseInt(m)} ${parseInt(h)} * * *`;
+  profile.notification.schedule      = `${parseInt(m)} ${parseInt(h)} * * *`;
+  profile.notification.max_job_age_days  = parseInt(document.getElementById('max-job-age-days').value) || 7;
+  profile.notification.rerank_candidates = parseInt(document.getElementById('rerank-candidates').value) || 30;
+  profile.notification.rerank_min_score  = parseFloat(document.getElementById('rerank-min-score').value) || 0.3;
   await saveProfile('settings-save-status');
 }
 async function saveProfile(statusId) {
