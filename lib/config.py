@@ -11,7 +11,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     openrouter_api_key: str = ""
-    openrouter_model: str = "meta-llama/llama-3.3-70b:free"
+    openrouter_model: str = "deepseek/deepseek-v4-flash"
+    jina_api_key: str = ""
     site_url: str = ""  # e.g. http://192.168.1.100:3006 — shown as "Edit profile" link in email footer
 
 
