@@ -175,7 +175,9 @@ def _sent_map() -> dict[str, str]:
         return {}
 
 
-def query_jobs(threshold: int, max_jobs: int) -> list[dict]:
+STALE_DATE_POSTED_DAYS = 14
+
+def query_jobs(threshold: int, max_jobs: int, max_job_age_days: int = 7) -> list[dict]:
     if not JOBS_DB.exists():
         return []
     con = None
@@ -189,8 +191,19 @@ def query_jobs(threshold: int, max_jobs: int) -> list[dict]:
             WHERE suitability_score >= ?
               AND (user_rating IS NULL OR user_rating != -1)
               AND (hidden = 0 OR hidden IS NULL)
+              AND (
+                (
+                  date_posted IS NOT NULL AND date_posted != 'nan' AND date_posted != ''
+                  AND date(date_posted) >= date('now', '-' || ? || ' days')
+                )
+                OR
+                (
+                  (date_posted IS NULL OR date_posted = 'nan' OR date_posted = '')
+                  AND discovered_at >= datetime('now', '-' || ? || ' days')
+                )
+              )
             ORDER BY suitability_score DESC
-        """, (threshold,)).fetchall()
+        """, (threshold, STALE_DATE_POSTED_DAYS, max_job_age_days)).fetchall()
         sent_urls = set(_sent_map().keys())
         results = []
         for r in rows:
@@ -403,7 +416,8 @@ def preview() -> PreviewResponse:
     try:
         profile = read_profile()
         notif = profile["notification"]
-        jobs = query_jobs(notif["score_threshold"], notif["max_jobs_per_email"])
+        jobs = query_jobs(notif["score_threshold"], notif["max_jobs_per_email"],
+                          notif.get("max_job_age_days", 7))
         return PreviewResponse(jobs=jobs, count=len(jobs))
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -892,7 +906,8 @@ def test_send() -> TestSendResponse:
     profile = read_profile()
     notif = profile["notification"]
 
-    jobs = query_jobs(notif["score_threshold"], notif["max_jobs_per_email"])
+    jobs = query_jobs(notif["score_threshold"], notif["max_jobs_per_email"],
+                      notif.get("max_job_age_days", 7))
     if not jobs:
         return TestSendResponse(ok=False, message="No jobs above threshold — nothing to send.")
 
