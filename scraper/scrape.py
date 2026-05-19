@@ -14,9 +14,12 @@ from pathlib import Path
 
 import requests
 import yaml
-from jobspy import scrape_jobs
+from jobspy import JobType, scrape_jobs
 
 from config import get_settings
+from quality_gate import evaluate_gate
+from sources.ats import fetch_ats_jobs
+from sources.rss import fetch_rss_jobs
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,11 +88,24 @@ def init_db() -> sqlite3.Connection:
         )
     """)
     # Migrations — idempotent, safe on existing DBs
-    for col, typedef in [("description", "TEXT"), ("language", "TEXT")]:
+    for col, typedef in [("description", "TEXT"), ("language", "TEXT"), ("site", "TEXT")]:
         try:
             con.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typedef}")
         except sqlite3.OperationalError:
             pass  # column already exists
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS filtered_jobs (
+            job_url      TEXT PRIMARY KEY,
+            title        TEXT,
+            employer     TEXT,
+            location     TEXT,
+            site         TEXT,
+            reason       TEXT,
+            gate_score   REAL,
+            discovered_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     con.commit()
     return con
 
@@ -103,13 +119,35 @@ def insert_job(con: sqlite3.Connection, job: dict) -> None:
         INSERT OR IGNORE INTO jobs
             (id, title, employer, location, job_url, suitability_score,
              suitability_reason, date_posted, is_remote, job_type,
-             discovered_at, description, language)
+             discovered_at, description, language, site)
         VALUES
             (:id, :title, :employer, :location, :job_url, :suitability_score,
              :suitability_reason, :date_posted, :is_remote, :job_type,
-             :discovered_at, :description, :language)
+             :discovered_at, :description, :language, :site)
     """, job)
     con.commit()
+
+
+def _insert_filtered(con: sqlite3.Connection, job: dict, reason: str, gate_score: float) -> None:
+    """Store a gate-rejected job in the filtered_jobs audit table."""
+    try:
+        con.execute("""
+            INSERT OR IGNORE INTO filtered_jobs
+                (job_url, title, employer, location, site, reason, gate_score, discovered_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            job.get("job_url") or "",
+            job.get("title") or "",
+            job.get("employer") or job.get("company") or "",
+            job.get("location") or "",
+            job.get("site") or "",
+            reason,
+            gate_score,
+            datetime.now(timezone.utc).isoformat(),
+        ))
+        con.commit()
+    except Exception as exc:
+        log.warning("Could not insert filtered job: %s", exc)
 
 
 # ── Pre-filters ───────────────────────────────────────────────────────────────
@@ -243,6 +281,86 @@ def score_job(job: dict, profile: dict, settings) -> tuple[float, str]:
 
 # ── Scrape ────────────────────────────────────────────────────────────────────
 
+def _process_job_dict(
+    job_dict: dict,
+    con: sqlite3.Connection,
+    seen: set,
+    profile: dict,
+    settings,
+    allowed_regions: list | None,
+    require_language: str | None,
+    scoring_config: dict,
+) -> tuple[int, int, int]:
+    """Process one normalized job dict. Returns (added, skipped_location, skipped_language)."""
+    url = str(job_dict.get("job_url") or "")
+    if not url or url in seen:
+        return 0, 0, 0
+    seen.add(url)
+
+    is_remote = bool(job_dict.get("is_remote"))
+    job_location = str(job_dict.get("location") or "")
+    description = str(job_dict.get("description") or "")
+    title_str = str(job_dict.get("title") or "")
+    company_str = str(job_dict.get("company") or job_dict.get("employer") or "")
+
+    if not location_allowed(job_location, is_remote, allowed_regions):
+        log.info("Skip (location): %s @ %s — %s", title_str, company_str, job_location)
+        return 0, 1, 0
+
+    if not language_ok(title_str + " " + description[:500], require_language):
+        log.info("Skip (language): %s @ %s", title_str, company_str)
+        return 0, 0, 1
+
+    job = {
+        "id": str(uuid.uuid4()),
+        "title": title_str,
+        "employer": company_str,
+        "location": job_location,
+        "job_url": url,
+        "date_posted": str(job_dict.get("date_posted") or ""),
+        "is_remote": 1 if is_remote else 0,
+        "job_type": str(job_dict.get("job_type") or ""),
+        "description": description,
+        "site": str(job_dict.get("site") or ""),
+        "discovered_at": datetime.now(timezone.utc).isoformat(),
+        "suitability_score": 0.0,
+        "suitability_reason": "",
+        "language": None,
+    }
+
+    # Quality gate (A4) — runs before LLM scoring to avoid wasting API calls
+    passes, gate_reason, gate_score = evaluate_gate(job)
+    if not passes:
+        log.info("Gate reject [%s]: %s", gate_reason, job.get("title"))
+        _insert_filtered(con, job, gate_reason, gate_score)
+        return 0, 0, 0
+
+    log.info("Scoring: %s @ %s", job["title"], job["employer"])
+    raw_score, reason = score_job(job, profile, settings)
+    adjusted_score = apply_entity_boost(raw_score, description, scoring_config)
+    delta = round(adjusted_score - raw_score)
+    if delta != 0:
+        sign = "+" if delta > 0 else ""
+        reason = f"{reason} [{sign}{delta}pts entity boost]"
+        log.info("Entity boost: %s raw=%.0f adjusted=%.0f", job["title"], raw_score, adjusted_score)
+
+    job["suitability_score"] = adjusted_score
+    job["suitability_reason"] = reason
+    job["description"] = description[:JOB_DESCRIPTION_MAX_CHARS]
+
+    # Detect language for storage
+    if require_language:
+        try:
+            from fast_langdetect import detect
+            result = detect(job["title"] + " " + description[:500])
+            job["language"] = (result.get("lang") or result.get("language") or "").lower()
+        except Exception:
+            pass
+
+    insert_job(con, job)
+    return 1, 0, 0
+
+
 def run(profile: dict, settings, deep: bool = False) -> None:
     search = profile.get("search", {})
     terms = search.get("terms", [])
@@ -265,7 +383,17 @@ def run(profile: dict, settings, deep: bool = False) -> None:
     skipped_location = 0
     skipped_language = 0
 
-    for term in terms:
+    # A5 — Boolean query generation (opt-in via profile.search.use_generated_query)
+    effective_terms = list(terms)
+    if search.get("use_generated_query", False) and settings.openrouter_api_key:
+        from query_gen import generate_search_term
+        generated = generate_search_term(profile, settings)
+        if generated:
+            log.info("Using generated Boolean query: %s", generated[:120])
+            effective_terms = [generated]
+
+    # ── jobspy scraping ───────────────────────────────────────────────────────
+    for term in effective_terms:
         for location in locations:
             log.info("Scraping: '%s' in %s", term, location)
             try:
@@ -275,6 +403,9 @@ def run(profile: dict, settings, deep: bool = False) -> None:
                     location=location,
                     results_wanted=results_per_site,
                     country_indeed=INDEED_COUNTRY,
+                    linkedin_fetch_description=True,   # A1: fetch full LinkedIn descriptions
+                    job_type=JobType.FULL_TIME,         # A1: filter to full-time only at source
+                    enforce_annual_salary=True,         # A1: normalize salary to annual
                     **hours_old_param,
                 )
             except Exception as e:
@@ -282,65 +413,44 @@ def run(profile: dict, settings, deep: bool = False) -> None:
                 continue
 
             for _, row in df.iterrows():
-                url = str(row.get("job_url") or "")
-                if not url or url in seen:
-                    continue
-                seen.add(url)
+                n, sl, slang = _process_job_dict(
+                    dict(row), con, seen, profile, settings,
+                    allowed_regions, require_language, scoring_config,
+                )
+                new_total += n
+                skipped_location += sl
+                skipped_language += slang
 
-                is_remote = bool(row.get("is_remote"))
-                job_location = str(row.get("location") or "")
-                description = str(row.get("description") or "")
+    # ── RSS / API job boards (A2) ─────────────────────────────────────────────
+    log.info("Fetching RSS/API job sources...")
+    try:
+        rss_jobs = fetch_rss_jobs(profile)
+        for job_dict in rss_jobs:
+            n, sl, slang = _process_job_dict(
+                job_dict, con, seen, profile, settings,
+                allowed_regions, require_language, scoring_config,
+            )
+            new_total += n
+            skipped_location += sl
+            skipped_language += slang
+    except Exception as exc:
+        log.error("RSS fetch error: %s", exc)
 
-                if not location_allowed(job_location, is_remote, allowed_regions):
-                    log.info("Skip (location): %s @ %s — %s", row.get("title"), row.get("company"), job_location)
-                    skipped_location += 1
-                    continue
-
-                if not language_ok(str(row.get("title") or "") + " " + description[:500], require_language):
-                    log.info("Skip (language): %s @ %s", row.get("title"), row.get("company"))
-                    skipped_language += 1
-                    continue
-
-                job = {
-                    "id": str(uuid.uuid4()),
-                    "title": str(row.get("title") or ""),
-                    "employer": str(row.get("company") or ""),
-                    "location": job_location,
-                    "job_url": url,
-                    "date_posted": str(row.get("date_posted") or ""),
-                    "is_remote": 1 if is_remote else 0,
-                    "job_type": str(row.get("job_type") or ""),
-                    "description": description,
-                    "discovered_at": datetime.now(timezone.utc).isoformat(),
-                    "suitability_score": 0.0,
-                    "suitability_reason": "",
-                    "language": None,
-                }
-
-                log.info("Scoring: %s @ %s", job["title"], job["employer"])
-                raw_score, reason = score_job(job, profile, settings)
-                adjusted_score = apply_entity_boost(raw_score, description, scoring_config)
-                delta = round(adjusted_score - raw_score)
-                if delta != 0:
-                    sign = "+" if delta > 0 else ""
-                    reason = f"{reason} [{sign}{delta}pts entity boost]"
-                    log.info("Entity boost: %s raw=%.0f adjusted=%.0f", job["title"], raw_score, adjusted_score)
-
-                job["suitability_score"] = adjusted_score
-                job["suitability_reason"] = reason
-                job["description"] = description[:JOB_DESCRIPTION_MAX_CHARS]
-
-                # Detect language for storage (reuse result if already computed above)
-                if require_language:
-                    try:
-                        from fast_langdetect import detect
-                        result = detect(job["title"] + " " + description[:500])
-                        job["language"] = (result.get("lang") or result.get("language") or "").lower()
-                    except Exception:
-                        pass
-
-                insert_job(con, job)
-                new_total += 1
+    # ── ATS direct scraping (A3) ──────────────────────────────────────────────
+    if search.get("ats_companies"):
+        log.info("Fetching ATS job sources...")
+        try:
+            ats_jobs = fetch_ats_jobs(profile)
+            for job_dict in ats_jobs:
+                n, sl, slang = _process_job_dict(
+                    job_dict, con, seen, profile, settings,
+                    allowed_regions, require_language, scoring_config,
+                )
+                new_total += n
+                skipped_location += sl
+                skipped_language += slang
+        except Exception as exc:
+            log.error("ATS fetch error: %s", exc)
 
     con.close()
     log.info("Done — %d new jobs added (%d skipped location, %d skipped language).",
