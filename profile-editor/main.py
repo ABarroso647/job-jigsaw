@@ -59,6 +59,8 @@ DEFAULT_PROFILE = {
         "results_per_site": 25,
         "require_language": None,   # None = disabled; "en" = English only
         "allowed_regions": None,    # None = disabled; list of strings = whitelist
+        "ats_companies": [],        # A3: [{name, greenhouse_slug?, lever_slug?, ashby_slug?}]
+        "use_generated_query": False,  # A5: opt-in LLM-generated Boolean search query
     },
     "scoring": {
         "boost": [],
@@ -73,6 +75,10 @@ DEFAULT_PROFILE = {
         "max_job_age_days": 7,      # fallback age when date_posted is unknown
         "rerank_candidates": 30,    # how many to feed Jina before trimming to max_jobs
         "rerank_min_score": 0.3,    # drop jobs below this Jina relevance score
+        "linkedin_max_jobs": 5,     # A6: per-source email budget
+        "indeed_max_jobs": 3,
+        "rss_max_jobs": 2,
+        "ats_max_jobs": 3,
     },
 }
 
@@ -106,6 +112,27 @@ def _init_jobs_db() -> None:
             notes TEXT,
             hidden INTEGER DEFAULT 0,
             is_applied INTEGER DEFAULT 0
+        )
+    """)
+    # Migrations — idempotent, safe on existing DBs
+    for col_sql in [
+        "ALTER TABLE jobs ADD COLUMN site TEXT",      # A3: job board source
+    ]:
+        try:
+            con.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    # A4 — filtered_jobs audit table
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS filtered_jobs (
+            job_url TEXT PRIMARY KEY,
+            title TEXT,
+            employer TEXT,
+            location TEXT,
+            site TEXT,
+            reason TEXT,
+            gate_score REAL,
+            discovered_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
     con.commit()
@@ -615,6 +642,38 @@ def clear_unsent_jobs():
         con.commit()
         con.close()
         return {"deleted": deleted}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/jobs/filtered")
+def get_filtered_jobs():
+    """Return last 50 gate-rejected jobs with rejection reason (A4 audit trail)."""
+    if not JOBS_DB.exists():
+        return []
+    try:
+        con = sqlite3.connect(JOBS_DB)
+        con.row_factory = sqlite3.Row
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS filtered_jobs (
+                job_url TEXT PRIMARY KEY,
+                title TEXT,
+                employer TEXT,
+                location TEXT,
+                site TEXT,
+                reason TEXT,
+                gate_score REAL,
+                discovered_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        rows = con.execute("""
+            SELECT job_url, title, employer, location, site, reason, gate_score, discovered_at
+            FROM filtered_jobs
+            ORDER BY discovered_at DESC
+            LIMIT 50
+        """).fetchall()
+        con.close()
+        return [dict(r) for r in rows]
     except Exception as e:
         raise HTTPException(500, str(e))
 

@@ -68,7 +68,8 @@ def fetch_unsent_jobs(profile: dict, sent_con: sqlite3.Connection) -> list[dict]
         rows = con.execute("""
             SELECT title, employer, location, job_url, suitability_score,
                    suitability_reason, date_posted, is_remote, job_type,
-                   COALESCE(description, '') as description
+                   COALESCE(description, '') as description,
+                   COALESCE(site, '') as site
             FROM jobs
             WHERE suitability_score >= ?
               AND (user_rating IS NULL OR user_rating != -1)
@@ -286,6 +287,43 @@ def main() -> None:
         return
 
     jobs = rerank_jobs(candidates, profile, settings)
+
+    # A6 — Per-source budget: cap jobs per source before final trim
+    linkedin_max = notif.get("linkedin_max_jobs", None)
+    indeed_max = notif.get("indeed_max_jobs", None)
+    rss_sources = {"weworkremotely", "remotive", "jobicy", "remoteok"}
+    ats_sources = {"greenhouse", "lever", "ashby"}
+    rss_max = notif.get("rss_max_jobs", None)
+    ats_max = notif.get("ats_max_jobs", None)
+
+    if any(v is not None for v in [linkedin_max, indeed_max, rss_max, ats_max]):
+        source_counts: dict[str, int] = {}
+        budgeted: list[dict] = []
+        for job in jobs:
+            site = (job.get("site") or "").lower()
+            budget_key = site
+            if site == "linkedin" and linkedin_max is not None:
+                if source_counts.get("linkedin", 0) >= linkedin_max:
+                    continue
+            elif site == "indeed" and indeed_max is not None:
+                if source_counts.get("indeed", 0) >= indeed_max:
+                    continue
+            elif site in rss_sources and rss_max is not None:
+                if source_counts.get("rss", 0) >= rss_max:
+                    continue
+                budget_key = "rss"
+            elif site in ats_sources and ats_max is not None:
+                if source_counts.get("ats", 0) >= ats_max:
+                    continue
+                budget_key = "ats"
+            source_counts[budget_key] = source_counts.get(budget_key, 0) + 1
+            budgeted.append(job)
+        log.info(
+            "Per-source budget: %d -> %d jobs (linkedin=%s indeed=%s rss=%s ats=%s)",
+            len(jobs), len(budgeted), linkedin_max, indeed_max, rss_max, ats_max,
+        )
+        jobs = budgeted
+
     jobs = jobs[:max_jobs]
 
     if not jobs:
