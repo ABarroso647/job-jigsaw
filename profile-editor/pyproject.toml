@@ -13,4 +13,13 @@ dependencies = [
     "pydantic-settings>=2.6.1",
     "pymupdf4llm>=0.0.17",
     "mammoth>=1.6.0",
+    "rapidfuzz>=3.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23",
+    "playwright>=1.40",
+    "pytest-playwright>=0.4",
 ]

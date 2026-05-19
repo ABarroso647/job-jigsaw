@@ -1,0 +1,8 @@
+{
+  "_description": "Baseline pass rates for feedback summary and insights prompt quality tests. Used by Branch B/E tests to verify LLM output quality doesn't regress.",
+  "_captured_at": "2026-05-19",
+  "_branch": "master (pre-Branch-B)",
+  "feedback_summary_pass_rate": null,
+  "insights_specificity_pass_rate": null,
+  "note": "Populate this file by running the eval suite (pytest tests/eval/) against the current main branch and recording the pass rates."
+}

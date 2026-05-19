@@ -68,24 +68,30 @@ def fetch_unsent_jobs(profile: dict, sent_con: sqlite3.Connection) -> list[dict]
         rows = con.execute("""
             SELECT title, employer, location, job_url, suitability_score,
                    suitability_reason, date_posted, is_remote, job_type,
-                   COALESCE(description, '') as description
+                   COALESCE(description, '') as description,
+                   COALESCE(site, '') as site
             FROM jobs
             WHERE suitability_score >= ?
               AND (user_rating IS NULL OR user_rating != -1)
               AND (hidden = 0 OR hidden IS NULL)
+              AND (status IS NULL OR status = 'interested')
               AND (
-                -- Primary: known date_posted must be within 14 days
-                (
-                  date_posted IS NOT NULL
-                  AND date_posted != 'nan'
-                  AND date_posted != ''
-                  AND date(date_posted) >= date('now', '-' || ? || ' days')
-                )
-                OR
-                -- Fallback: when date_posted is unknown, use discovered_at age
-                (
-                  (date_posted IS NULL OR date_posted = 'nan' OR date_posted = '')
-                  AND discovered_at >= datetime('now', '-' || ? || ' days')
+                -- E1: interested status bypasses staleness filter entirely
+                status = 'interested'
+                OR (
+                  -- Primary: known date_posted must be within 14 days
+                  (
+                    date_posted IS NOT NULL
+                    AND date_posted != 'nan'
+                    AND date_posted != ''
+                    AND date(date_posted) >= date('now', '-' || ? || ' days')
+                  )
+                  OR
+                  -- Fallback: when date_posted is unknown, use discovered_at age
+                  (
+                    (date_posted IS NULL OR date_posted = 'nan' OR date_posted = '')
+                    AND discovered_at >= datetime('now', '-' || ? || ' days')
+                  )
                 )
               )
             ORDER BY suitability_score DESC
@@ -286,6 +292,40 @@ def main() -> None:
         return
 
     jobs = rerank_jobs(candidates, profile, settings)
+
+    # A6 — Per-source budget: cap jobs per source before final trim
+    linkedin_max = notif.get("linkedin_max_jobs", None)
+    indeed_max = notif.get("indeed_max_jobs", None)
+    rss_sources = {"weworkremotely", "remotive", "jobicy", "remoteok"}
+    ats_sources = {"greenhouse", "lever", "ashby"}
+    rss_max = notif.get("rss_max_jobs", None)
+    ats_max = notif.get("ats_max_jobs", None)
+
+    if any(v is not None for v in [linkedin_max, indeed_max, rss_max, ats_max]):
+        source_counts: dict[str, int] = {}
+        budgeted: list[dict] = []
+        for job in jobs:
+            site = (job.get("site") or "").lower()
+            if site == "linkedin" and linkedin_max is not None:
+                if source_counts.get("linkedin", 0) >= linkedin_max:
+                    continue
+            elif site == "indeed" and indeed_max is not None:
+                if source_counts.get("indeed", 0) >= indeed_max:
+                    continue
+            elif site in rss_sources and rss_max is not None:
+                if source_counts.get("rss", 0) >= rss_max:
+                    continue
+                site = "rss"  # group for counting
+            elif site in ats_sources and ats_max is not None:
+                if source_counts.get("ats", 0) >= ats_max:
+                    continue
+                site = "ats"
+            source_counts[site] = source_counts.get(site, 0) + 1
+            budgeted.append(job)
+        log.info("Per-source budget: %d → %d jobs (budgets: linkedin=%s indeed=%s rss=%s ats=%s)",
+                 len(jobs), len(budgeted), linkedin_max, indeed_max, rss_max, ats_max)
+        jobs = budgeted
+
     jobs = jobs[:max_jobs]
 
     if not jobs:

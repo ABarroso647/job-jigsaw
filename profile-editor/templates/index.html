@@ -335,6 +335,36 @@
       padding: 6px 10px; border-radius: 6px; border: 1px solid #d1d5db;
       font-size: 13px; color: #374151;
     }
+    /* status select */
+    .status-select {
+      font-size: 12px; padding: 3px 6px; border-radius: 6px;
+      border: 1px solid #d1d5db; background: #fff; cursor: pointer;
+      color: #374151;
+    }
+    .status-select.status-interested { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+    .status-select.status-applied    { background: #f0fdf4; border-color: #bbf7d0; color: #15803d; }
+    .status-select.status-interviewing { background: #fefce8; border-color: #fde68a; color: #92400e; }
+    .status-select.status-rejected   { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+    .status-select.status-offer      { background: #fdf4ff; border-color: #e9d5ff; color: #7e22ce; }
+    /* tag chips */
+    .tag-chip {
+      display: inline-block; padding: 2px 8px;
+      background: #e0e7ff; border-radius: 12px;
+      font-size: 11px; margin: 2px; cursor: pointer;
+      border: 1px solid #c7d2fe;
+    }
+    .tag-chip:hover { background: #c7d2fe; }
+    .tag-chip.tag-positive { background: #dcfce7; border-color: #bbf7d0; }
+    .tag-chip.tag-negative { background: #fee2e2; border-color: #fecaca; }
+    /* pipeline kanban */
+    .pipeline-col { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; min-height: 200px; }
+    .pipeline-col-header { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+    .pipeline-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px; margin-bottom: 8px; font-size: 13px; }
+    .pipeline-card .p-title { font-weight: 600; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pipeline-card .p-company { color: #6b7280; font-size: 12px; }
+    /* tag input area */
+    .tag-input-row { display: flex; gap: 6px; margin-top: 6px; }
+    .tag-input-row input { flex: 1; font-size: 12px; padding: 3px 8px; }
   </style>
 </head>
 <body>
@@ -350,6 +380,8 @@
   <button onclick="switchTab('preview', this)">Preview</button>
   <button onclick="switchTab('history', this)">History</button>
   <button onclick="switchTab('insights', this)">Insights</button>
+  <button onclick="switchTab('wiki', this)">Wiki</button>
+  <button onclick="switchTab('pipeline', this)">Pipeline</button>
 </nav>
 
 <main>
@@ -652,6 +684,26 @@
       <button id="hist-next" onclick="histGoPage(histPage + 1)">Next →</button>
     </div>
 
+    <!-- A4: Filtered jobs collapsible section -->
+    <div class="card" style="margin-top:24px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;"
+           onclick="toggleFilteredSection()">
+        <h2 style="margin:0;">
+          Filtered
+          <span id="filtered-badge" style="font-size:13px;font-weight:normal;color:#6b7280;"></span>
+        </h2>
+        <span id="filtered-chevron" style="font-size:18px;color:#6b7280;">&#9662;</span>
+      </div>
+      <p style="font-size:13px;color:#6b7280;margin:4px 0 0;">
+        Jobs rejected before LLM scoring by the quality gate.
+      </p>
+      <div id="filtered-jobs-section" style="display:none;margin-top:12px;">
+        <div id="filtered-jobs-list">
+          <p style="color:#9ca3af;font-size:13px;">Loading&#8230;</p>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <!-- ── INSIGHTS TAB ───────────────────────────────────────────── -->
@@ -690,7 +742,66 @@
 
   </div>
 
+  <!-- ── WIKI TAB ─────────────────────────────────────────────── -->
+  <div id="tab-wiki" class="tab">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h2 style="margin:0;">Candidate Wiki</h2>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-secondary" onclick="migrateFromResume()">Extract from Resume</button>
+          <button class="btn btn-secondary" onclick="regenerateWiki()">Regenerate Wiki</button>
+          <button class="btn btn-primary" onclick="saveWiki()">Save</button>
+        </div>
+      </div>
+      <p style="font-size:13px;color:#6b7280;margin-bottom:16px;">
+        Structured knowledge base used by the LLM scorer. Keep it specific — real numbers, real tools, real companies.
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div>
+          <div style="font-size:12px;font-weight:600;color:#6b7280;margin-bottom:8px;">PREVIEW</div>
+          <div id="wiki-preview" style="font-size:13px;line-height:1.6;padding:12px;background:#f9fafb;border-radius:6px;min-height:400px;"></div>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:600;color:#6b7280;margin-bottom:8px;">EDIT</div>
+          <textarea id="wiki-edit" style="width:100%;min-height:400px;font-family:monospace;font-size:12px;padding:12px;border:1px solid #d1d5db;border-radius:6px;box-sizing:border-box;" oninput="renderWikiPreview()"></textarea>
+        </div>
+      </div>
+      <div id="wiki-updated" style="font-size:12px;color:#9ca3af;margin-top:8px;"></div>
+    </div>
+
+    <!-- Resume Health Card -->
+    <div class="card" id="resume-health-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h2 style="margin:0;">Resume Health</h2>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span id="health-score" style="font-size:24px;font-weight:700;color:#1f2937;"></span>
+          <button class="btn btn-secondary" onclick="analyzeResume()">Analyze Now</button>
+        </div>
+      </div>
+      <div id="health-dimensions" style="margin:16px 0;"></div>
+      <div id="health-suggestions"></div>
+    </div>
+  </div>
+
+
+  <!-- ── PIPELINE TAB ─────────────────────────────────────────── -->
+  <div id="tab-pipeline" class="tab">
+    <div class="card" style="margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <h2 style="margin-bottom:4px;">Application Pipeline</h2>
+          <p style="font-size:13px;color:#6b7280;">Track jobs through your application process.</p>
+        </div>
+        <button class="btn btn-secondary" onclick="loadPipeline()">Refresh</button>
+      </div>
+      <div style="font-size:13px;color:#6b7280;margin-top:12px;" id="pipeline-metrics"></div>
+    </div>
+    <div id="pipeline-board" style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;"></div>
+  </div>
+
 </main>
+
+<datalist id="tag-datalist"></datalist>
 
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -767,8 +878,10 @@ function switchTab(name, btn) {
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
   if (name === 'preview') { loadPreview(); loadScraperStatus(); }
-  if (name === 'history') { loadHistory(); loadInsightsStatus(); loadSentDates(); document.getElementById('hist-sent-date').style.display = ''; }
+  if (name === 'history') { loadHistory(); loadInsightsStatus(); loadSentDates(); document.getElementById('hist-sent-date').style.display = ''; loadFilteredCount(); }
   if (name === 'insights') { loadInsightsTab(); }
+  if (name === 'wiki') { loadWikiTab(); }
+  if (name === 'pipeline') { loadPipeline(); }
 }
 
 // ── Keyword table helpers ─────────────────────────────────────────────────────
@@ -1194,7 +1307,10 @@ async function loadHistory() {
       const disliked = j.user_rating === -1;
       const sentHtml = j.sent ? `<span class="sent-badge">Sent</span> ` : '';
       const date = j.discovered_at ? new Date(j.discovered_at).toLocaleDateString() : '';
-      return `<div class="hist-row" data-url="${escHtml(j.job_url)}">
+      const statusCls = j.status ? `status-${j.status}` : '';
+      const statusVal = j.status || '';
+      const jobUrlJson = escHtml(JSON.stringify(j.job_url));
+      return `<div class="hist-row" data-url="${escHtml(j.job_url)}" data-status="${escHtml(statusVal)}">
         <div class="row-main">
           <span class="score-badge ${scoreBadgeClass(score)}">${score}</span>
           <div class="row-info">
@@ -1206,18 +1322,34 @@ async function loadHistory() {
             </div>
           </div>
           <div class="row-actions">
+            <select class="status-select ${statusCls}" data-url="${escHtml(j.job_url)}"
+              onchange="setJobStatus(${jobUrlJson}, this)">
+              <option value="">— status —</option>
+              <option value="interested" ${statusVal==='interested'?'selected':''}>Interested</option>
+              <option value="applied"    ${statusVal==='applied'?'selected':''}>Applied</option>
+              <option value="interviewing" ${statusVal==='interviewing'?'selected':''}>Interviewing</option>
+              <option value="rejected"   ${statusVal==='rejected'?'selected':''}>Rejected</option>
+              <option value="offer"      ${statusVal==='offer'?'selected':''}>Offer</option>
+            </select>
             <button class="rate-btn like-btn ${liked?'liked':''}"
-              onclick="rateJob(${escHtml(JSON.stringify(j.job_url))},1,this,false)">👍</button>
+              onclick="rateJob(${jobUrlJson},1,this,false)">👍</button>
             <button class="rate-btn dislike-btn ${disliked?'disliked':''}"
-              onclick="rateJob(${escHtml(JSON.stringify(j.job_url))},-1,this,false)">👎</button>
+              onclick="rateJob(${jobUrlJson},-1,this,false)">👎</button>
             <button class="icon-btn ${j.notes?'note-active':''}"
               title="Notes" onclick="toggleNote(this)">📝</button>
           </div>
         </div>
         <div class="row-notes-panel ${j.notes?'open':''}">
           <textarea placeholder="Add notes about this job…">${escHtml(j.notes||'')}</textarea>
-          <button class="btn btn-secondary" style="font-size:12px;padding:4px 10px;"
-            onclick="saveNote(${escHtml(JSON.stringify(j.job_url))},this)">Save note</button>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+            <button class="btn btn-secondary" style="font-size:12px;padding:4px 10px;"
+              onclick="saveNote(${jobUrlJson},this)">Save note</button>
+            <span class="hist-job-tags" data-url="${escHtml(j.job_url)}"></span>
+            <span class="tag-input-row">
+              <input type="text" list="tag-datalist" placeholder="Add tag…" style="font-size:12px;padding:3px 8px;border:1px solid #d1d5db;border-radius:6px;width:130px;"
+                onkeydown="if(event.key==='Enter'){addTagToJob(${jobUrlJson},this);event.preventDefault();}">
+            </span>
+          </div>
         </div>
       </div>`;
     }).join('');
@@ -1229,6 +1361,10 @@ async function loadHistory() {
     document.getElementById('hist-next').disabled = data.page >= data.pages;
     document.getElementById('hist-page-info').textContent =
       `Page ${data.page} of ${data.pages} (${data.total} jobs)`;
+
+    // Load tags for visible jobs and update datalist
+    loadTags();
+    loadHistoryTags(data.jobs);
 
   } catch (e) {
     noticeEl.innerHTML = `<div class="notice notice-error">Error: ${escHtml(e.message)}</div>`;
@@ -1306,6 +1442,52 @@ async function clearUnsentJobs() {
     loadHistory();
     loadPreview();
   } catch (e) { alert('Failed: ' + e.message); }
+}
+
+// ── Filtered jobs (A4) ────────────────────────────────────────────────────────
+let filteredLoaded = false;
+
+async function loadFilteredCount() {
+  try {
+    const jobs = await api('GET', '/api/jobs/filtered');
+    const badge = document.getElementById('filtered-badge');
+    if (badge) badge.textContent = `(${jobs.length})`;
+  } catch { /* non-critical */ }
+}
+
+function toggleFilteredSection() {
+  const section = document.getElementById('filtered-jobs-section');
+  const chevron = document.getElementById('filtered-chevron');
+  const visible = section.style.display !== 'none';
+  section.style.display = visible ? 'none' : 'block';
+  chevron.innerHTML = visible ? '&#9662;' : '&#9652;';
+  if (!visible && !filteredLoaded) {
+    loadFilteredJobs();
+  }
+}
+
+async function loadFilteredJobs() {
+  const list = document.getElementById('filtered-jobs-list');
+  const badge = document.getElementById('filtered-badge');
+  try {
+    const jobs = await api('GET', '/api/jobs/filtered');
+    filteredLoaded = true;
+    badge.textContent = `(${jobs.length})`;
+    if (!jobs.length) {
+      list.innerHTML = '<p style="color:#9ca3af;font-size:13px;">No filtered jobs yet.</p>';
+      return;
+    }
+    list.innerHTML = jobs.map(j => `
+      <div style="padding:10px 0;border-bottom:1px solid #f3f4f6;">
+        <div style="font-weight:500;font-size:14px;">${escHtml(j.title || 'Unknown')}</div>
+        <div style="font-size:12px;color:#6b7280;">${escHtml(j.employer || '')}${j.location ? ' &mdash; ' + escHtml(j.location) : ''}</div>
+        <div style="font-size:12px;color:#dc2626;margin-top:2px;">Rejected: ${escHtml(j.reason || '')}</div>
+        ${j.gate_score !== null && j.gate_score !== undefined && j.gate_score > -100 ? `<div style="font-size:11px;color:#9ca3af;">Gate score: ${j.gate_score}</div>` : ''}
+      </div>
+    `).join('');
+  } catch (e) {
+    list.innerHTML = `<p style="color:#dc2626;font-size:13px;">Failed to load: ${escHtml(e.message)}</p>`;
+  }
 }
 
 // ── Insights tab ──────────────────────────────────────────────────────────────
@@ -1415,6 +1597,207 @@ function escHtml(str) {
 function notice(id, msg) {
   const el = document.getElementById(id);
   if (el) { el.textContent = msg; setTimeout(() => el.textContent = '', 4000); }
+}
+
+// ── Wiki tab ──────────────────────────────────────────────────────────────────
+async function loadWikiTab() {
+  const res = await fetch('/api/profile/wiki');
+  const data = await res.json();
+  document.getElementById('wiki-edit').value = data.wiki || '';
+  renderWikiPreview();
+  if (data.updated_at) {
+    document.getElementById('wiki-updated').textContent = `Last updated: ${new Date(data.updated_at).toLocaleString()}`;
+  }
+  loadResumeHealth();
+}
+
+function renderWikiPreview() {
+  const text = document.getElementById('wiki-edit').value;
+  const html = text
+    .replace(/^## (.+)$/gm, '<h3 style="font-size:13px;font-weight:600;margin:12px 0 4px;">$1</h3>')
+    .replace(/^# (.+)$/gm, '<h2 style="font-size:14px;font-weight:700;margin:0 0 8px;">$1</h2>')
+    .replace(/^- (.+)$/gm, '<li style="margin:2px 0;">$1</li>')
+    .replace(/\n/g, '<br>');
+  document.getElementById('wiki-preview').innerHTML = html;
+}
+
+async function saveWiki() {
+  const wiki = document.getElementById('wiki-edit').value;
+  await fetch('/api/profile/wiki', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({wiki}) });
+  notice('wiki-updated', '✓ Saved');
+}
+
+async function regenerateWiki() {
+  document.getElementById('wiki-preview').textContent = 'Regenerating...';
+  const res = await fetch('/api/profile/regenerate-wiki', { method: 'POST' });
+  const data = await res.json();
+  document.getElementById('wiki-edit').value = data.wiki;
+  renderWikiPreview();
+}
+
+async function migrateFromResume() {
+  if (!confirm('Extract structured experience/projects/skills from your resume text? This will overwrite existing structured fields.')) return;
+  const res = await fetch('/api/profile/migrate-from-resume', { method: 'POST' });
+  const data = await res.json();
+  alert(`Extracted ${data.experience_count} experience entries and ${data.skills_count} skills. Now regenerate your wiki.`);
+}
+
+async function loadResumeHealth() {
+  if (!profile.resume_health) {
+    document.getElementById('health-score').textContent = '—';
+    return;
+  }
+  const h = profile.resume_health;
+  document.getElementById('health-score').textContent = h.score + '/100';
+  const dims = h.dimensions || {};
+  document.getElementById('health-dimensions').innerHTML = Object.entries(dims).map(([k, v]) =>
+    `<div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+      <span style="font-size:12px;width:160px;color:#6b7280;">${k.replace(/_/g,' ')}</span>
+      <div style="flex:1;background:#e5e7eb;border-radius:4px;height:6px;">
+        <div style="width:${v}%;background:#3b82f6;border-radius:4px;height:6px;"></div>
+      </div>
+      <span style="font-size:12px;color:#374151;width:32px;">${v}%</span>
+    </div>`
+  ).join('');
+  document.getElementById('health-suggestions').innerHTML = (h.suggestions || []).map(s =>
+    `<div style="font-size:13px;padding:6px 0;border-top:1px solid #f3f4f6;">▸ ${escHtml(s)}</div>`
+  ).join('');
+}
+
+async function analyzeResume() {
+  document.getElementById('health-score').textContent = '...';
+  const res = await fetch('/api/profile/analyze-resume', { method: 'POST' });
+  const data = await res.json();
+  profile.resume_health = data;
+  loadResumeHealth();
+}
+
+// ── E1: Application pipeline ─────────────────────────────────────────────────
+async function setJobStatus(jobUrl, selectEl) {
+  const status = selectEl.value;
+  // Update styling
+  selectEl.className = 'status-select' + (status ? ` status-${status}` : '');
+  try {
+    await fetch(`/api/jobs/${encodeURIComponent(jobUrl)}/status`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: status || 'null' }),
+    });
+    // Update data-status on the row
+    const row = selectEl.closest('[data-url]');
+    if (row) row.dataset.status = status;
+  } catch (e) {
+    alert('Could not update status: ' + e.message);
+  }
+}
+
+async function loadPipeline() {
+  const board = document.getElementById('pipeline-board');
+  const metricsEl = document.getElementById('pipeline-metrics');
+  board.innerHTML = '<div style="color:#6b7280;font-size:14px;grid-column:1/-1;">Loading…</div>';
+  try {
+    const jobs = await api('GET', '/api/jobs?include_all_status=true');
+    const stats = await api('GET', '/api/pipeline/stats');
+    const columns = [
+      { key: 'interested',   label: 'Interested',   color: '#1d4ed8' },
+      { key: 'applied',      label: 'Applied',       color: '#15803d' },
+      { key: 'interviewing', label: 'Interviewing',  color: '#92400e' },
+      { key: 'rejected',     label: 'Rejected',      color: '#b91c1c' },
+      { key: 'offer',        label: 'Offer',         color: '#7e22ce' },
+    ];
+    const grouped = {};
+    for (const col of columns) grouped[col.key] = [];
+    for (const job of jobs) {
+      if (grouped[job.status]) grouped[job.status].push(job);
+    }
+    board.innerHTML = columns.map(col => {
+      const colJobs = grouped[col.key] || [];
+      const cards = colJobs.map(j => `
+        <div class="pipeline-card">
+          <div class="p-title" title="${escHtml(j.title || '')}">${escHtml(j.title || '')}</div>
+          <div class="p-company">${escHtml(j.company || '')} · ${j.score || 0}/100</div>
+          <div style="margin-top:6px;">
+            <select class="status-select status-${escHtml(col.key)}" style="width:100%;font-size:11px;"
+              onchange="setJobStatus('${escHtml(j.job_url)}', this)">
+              <option value="">— move to —</option>
+              <option value="interested" ${col.key==='interested'?'selected':''}>Interested</option>
+              <option value="applied"    ${col.key==='applied'?'selected':''}>Applied</option>
+              <option value="interviewing" ${col.key==='interviewing'?'selected':''}>Interviewing</option>
+              <option value="rejected"   ${col.key==='rejected'?'selected':''}>Rejected</option>
+              <option value="offer"      ${col.key==='offer'?'selected':''}>Offer</option>
+            </select>
+            <a href="${escHtml(j.job_url)}" target="_blank" style="font-size:11px;color:#2563eb;display:block;margin-top:4px;">View →</a>
+          </div>
+        </div>`).join('');
+      return `<div class="pipeline-col">
+        <div class="pipeline-col-header">
+          <span style="color:${col.color}">${col.label}</span>
+          <span style="background:#f3f4f6;padding:2px 8px;border-radius:12px;font-size:11px;">${colJobs.length}</span>
+        </div>
+        ${cards || '<div style="color:#9ca3af;font-size:12px;text-align:center;padding:16px 0;">Empty</div>'}
+      </div>`;
+    }).join('');
+    // Metrics
+    const appliedThisWeek = (stats['applied'] && stats['applied'].this_week) || 0;
+    const totalApplied = (stats['applied'] && stats['applied'].total) || 0;
+    const totalInterviewing = (stats['interviewing'] && stats['interviewing'].total) || 0;
+    metricsEl.textContent = `Applied this week: ${appliedThisWeek} · Total applied: ${totalApplied} · Interviewing: ${totalInterviewing}`;
+  } catch (e) {
+    board.innerHTML = `<div style="color:#dc2626;grid-column:1/-1;">Error: ${escHtml(e.message)}</div>`;
+  }
+}
+
+// ── E2: Dynamic feedback labels (tags) ───────────────────────────────────────
+window._allTags = [];
+
+async function loadTags() {
+  try {
+    const res = await fetch('/api/tags');
+    window._allTags = await res.json();
+    const dl = document.getElementById('tag-datalist');
+    if (dl) dl.innerHTML = window._allTags.map(t => `<option value="${escHtml(t.name)}">`).join('');
+  } catch { /* ignore */ }
+}
+
+function renderTagChips(jobUrl, tags) {
+  return tags.map(t => {
+    const cls = t.sentiment > 0 ? 'tag-positive' : t.sentiment < 0 ? 'tag-negative' : '';
+    return `<span class="tag-chip ${cls}" onclick="removeTag(${escHtml(JSON.stringify(jobUrl))}, '${escHtml(t.name)}')" title="Remove tag">${escHtml(t.name)} ×</span>`;
+  }).join('');
+}
+
+async function loadJobTags(jobUrl) {
+  try {
+    const tags = await api('GET', `/api/jobs/${encodeURIComponent(jobUrl)}/tags`);
+    const el = document.querySelector(`.hist-job-tags[data-url="${CSS.escape(jobUrl)}"]`);
+    if (el) el.innerHTML = renderTagChips(jobUrl, tags);
+  } catch { /* ignore */ }
+}
+
+async function addTagToJob(jobUrl, inputEl) {
+  const name = inputEl.value.trim().toLowerCase().replace(/\s+/g, '-');
+  if (!name) return;
+  try {
+    await api('POST', `/api/jobs/${encodeURIComponent(jobUrl)}/tags`, { name });
+    inputEl.value = '';
+    await loadJobTags(jobUrl);
+    await loadTags();
+  } catch (e) { alert('Could not add tag: ' + e.message); }
+}
+
+async function removeTag(jobUrl, tagName) {
+  try {
+    await fetch(`/api/jobs/${encodeURIComponent(jobUrl)}/tags/${encodeURIComponent(tagName)}`, { method: 'DELETE' });
+    await loadJobTags(jobUrl);
+    await loadTags();
+  } catch (e) { alert('Could not remove tag: ' + e.message); }
+}
+
+async function loadHistoryTags(jobs) {
+  // Load tags for each visible job row
+  for (const j of jobs) {
+    loadJobTags(j.job_url);
+  }
 }
 
 init();

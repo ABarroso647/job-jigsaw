@@ -52,6 +52,13 @@ SORT_MAP = {
 DEFAULT_PROFILE = {
     "resume": "",
     "description": "",
+    "experience": [],       # list of {title, company, start, end, description, skills[]}
+    "projects": [],         # list of {name, description, skills[]}
+    "structured_skills": [],  # list of {name, category, evidence_level}
+                              # evidence_level: "experience" | "project" | "skills_list"
+    "wiki": "",
+    "wiki_updated_at": None,
+    "resume_health": None,
     "search": {
         "terms": [],
         "locations": ["Toronto, ON"],
@@ -59,6 +66,8 @@ DEFAULT_PROFILE = {
         "results_per_site": 25,
         "require_language": None,   # None = disabled; "en" = English only
         "allowed_regions": None,    # None = disabled; list of strings = whitelist
+        "ats_companies": [],        # A3: [{name, greenhouse_slug?, lever_slug?, ashby_slug?}]
+        "use_generated_query": False,  # A5: opt-in LLM-generated Boolean search query
     },
     "scoring": {
         "boost": [],
@@ -73,6 +82,10 @@ DEFAULT_PROFILE = {
         "max_job_age_days": 7,      # fallback age when date_posted is unknown
         "rerank_candidates": 30,    # how many to feed Jina before trimming to max_jobs
         "rerank_min_score": 0.3,    # drop jobs below this Jina relevance score
+        "linkedin_max_jobs": 5,     # A6: per-source email budget
+        "indeed_max_jobs": 3,
+        "rss_max_jobs": 2,
+        "ats_max_jobs": 3,
     },
 }
 
@@ -84,6 +97,17 @@ def _init_profile() -> None:
         PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
         write_profile(DEFAULT_PROFILE)
         log.info("Created default profile.yaml at %s", PROFILE_PATH)
+
+
+SEED_TAGS = [
+    ("cold-calling-heavy", -0.8),
+    ("remote-friendly", 0.8),
+    ("too-junior", -0.6),
+    ("too-senior", -0.4),
+    ("wrong-industry", -0.7),
+    ("strong-culture-fit", 0.7),
+    ("good-compensation", 0.6),
+]
 
 
 def _init_jobs_db() -> None:
@@ -108,6 +132,52 @@ def _init_jobs_db() -> None:
             is_applied INTEGER DEFAULT 0
         )
     """)
+    # Migrations — idempotent
+    for col_sql in [
+        "ALTER TABLE jobs ADD COLUMN site TEXT",            # A3: job board source
+        "ALTER TABLE jobs ADD COLUMN status TEXT",          # E1: application pipeline
+        "ALTER TABLE jobs ADD COLUMN status_updated_at TEXT",
+    ]:
+        try:
+            con.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    # E2 — dynamic feedback labels tables
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            sentiment REAL DEFAULT 0,
+            count INTEGER DEFAULT 0
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS job_tags (
+            job_url TEXT NOT NULL,
+            tag_id INTEGER NOT NULL,
+            PRIMARY KEY (job_url, tag_id),
+            FOREIGN KEY (tag_id) REFERENCES tags(id)
+        )
+    """)
+    # A4 — filtered_jobs audit table
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS filtered_jobs (
+            job_url TEXT PRIMARY KEY,
+            title TEXT,
+            employer TEXT,
+            location TEXT,
+            site TEXT,
+            reason TEXT,
+            gate_score REAL,
+            discovered_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # Seed tags on first run (INSERT OR IGNORE is idempotent)
+    for name, sentiment in SEED_TAGS:
+        con.execute(
+            "INSERT OR IGNORE INTO tags (name, sentiment) VALUES (?, ?)",
+            (name, sentiment),
+        )
     con.commit()
     con.close()
 
@@ -182,6 +252,43 @@ def _sent_map() -> dict[str, str]:
 
 STALE_DATE_POSTED_DAYS = 14
 
+
+def _get_all_tags() -> list[dict]:
+    """Return all tags as a list of dicts."""
+    if not JOBS_DB.exists():
+        return []
+    try:
+        con = sqlite3.connect(JOBS_DB)
+        con.row_factory = sqlite3.Row
+        rows = con.execute("SELECT id, name, sentiment, count FROM tags ORDER BY count DESC").fetchall()
+        con.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def _apply_tag_delta(jobs: list[dict]) -> list[dict]:
+    """Adjust scores in-place by ±5 per tag (capped at ±15)."""
+    if not jobs or not JOBS_DB.exists():
+        return jobs
+    try:
+        con = sqlite3.connect(JOBS_DB)
+        con.row_factory = sqlite3.Row
+        for job in jobs:
+            rows = con.execute("""
+                SELECT t.sentiment FROM job_tags jt
+                JOIN tags t ON t.id = jt.tag_id
+                WHERE jt.job_url = ?
+            """, (job["job_url"],)).fetchall()
+            delta = sum(r["sentiment"] * 5 for r in rows)
+            delta = max(-15, min(15, delta))
+            job["score"] = job.get("score", 0) + delta
+        con.close()
+    except Exception as e:
+        log.warning("tag_delta computation failed: %s", e)
+    return jobs
+
+
 def query_jobs(threshold: int, max_jobs: int, max_job_age_days: int = 7) -> list[dict]:
     if not JOBS_DB.exists():
         return []
@@ -191,20 +298,24 @@ def query_jobs(threshold: int, max_jobs: int, max_job_age_days: int = 7) -> list
         con.row_factory = sqlite3.Row
         rows = con.execute("""
             SELECT title, employer, location, job_url, suitability_score,
-                   date_posted, is_remote, job_type, user_rating
+                   date_posted, is_remote, job_type, user_rating, status
             FROM jobs
             WHERE suitability_score >= ?
               AND (user_rating IS NULL OR user_rating != -1)
               AND (hidden = 0 OR hidden IS NULL)
+              AND (status IS NULL OR status = 'interested')
               AND (
-                (
-                  date_posted IS NOT NULL AND date_posted != 'nan' AND date_posted != ''
-                  AND date(date_posted) >= date('now', '-' || ? || ' days')
-                )
-                OR
-                (
-                  (date_posted IS NULL OR date_posted = 'nan' OR date_posted = '')
-                  AND discovered_at >= datetime('now', '-' || ? || ' days')
+                status = 'interested'
+                OR (
+                  (
+                    date_posted IS NOT NULL AND date_posted != 'nan' AND date_posted != ''
+                    AND date(date_posted) >= date('now', '-' || ? || ' days')
+                  )
+                  OR
+                  (
+                    (date_posted IS NULL OR date_posted = 'nan' OR date_posted = '')
+                    AND discovered_at >= datetime('now', '-' || ? || ' days')
+                  )
                 )
               )
             ORDER BY suitability_score DESC
@@ -220,6 +331,7 @@ def query_jobs(threshold: int, max_jobs: int, max_job_age_days: int = 7) -> list
             results.append(job)
             if len(results) >= max_jobs:
                 break
+        results = _apply_tag_delta(results)
         return results
     except Exception as e:
         log.error("jobs.db query failed: %s", e)
@@ -314,6 +426,10 @@ class ApplyRequest(BaseModel):
 
 class FeedbackSummaryResponse(BaseModel):
     summary: str
+
+
+class StatusUpdate(BaseModel):
+    status: str  # interested | applied | interviewing | rejected | offer | null
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -462,9 +578,13 @@ def get_history(
     sort_clause = SORT_MAP.get(sort, SORT_MAP["discovered"])
 
     filter_sql = {
-        "liked":    "AND user_rating = 1",
-        "disliked": "AND user_rating = -1",
-        "applied":  "AND is_applied = 1",
+        "liked":        "AND user_rating = 1",
+        "disliked":     "AND user_rating = -1",
+        "applied":      "AND is_applied = 1",
+        "interested":   "AND status = 'interested'",
+        "interviewing": "AND status = 'interviewing'",
+        "offer":        "AND status = 'offer'",
+        "rejected":     "AND status = 'rejected'",
     }.get(filter, "")
 
     params: list = []
@@ -482,7 +602,8 @@ def get_history(
             SELECT id, title, employer, location, job_url,
                    suitability_score, suitability_reason,
                    date_posted, is_remote, job_type,
-                   discovered_at, user_rating, notes, is_applied
+                   discovered_at, user_rating, notes, is_applied,
+                   status, status_updated_at
             FROM jobs
             WHERE (hidden = 0 OR hidden IS NULL)
             {filter_sql}
@@ -513,7 +634,7 @@ def get_history(
             jobs = [j for j in jobs if j.get("sent_at", "").startswith(sent_date)]
     elif filter == "unsent":
         jobs = [j for j in jobs if not j["sent"]]
-    elif filter == "applied":
+    elif filter in ("applied", "interested", "interviewing", "offer", "rejected"):
         pass  # already filtered in SQL
 
     total = len(jobs)
@@ -556,6 +677,18 @@ def save_note(body: NoteRequest):
                     (body.notes or None, body.job_url))
         con.commit()
         con.close()
+        # Async tag extraction from note
+        try:
+            settings = get_settings()
+            if settings.openrouter_api_key and body.notes:
+                import threading
+                def _bg_extract():
+                    tags = extract_tags_from_note(body.notes, body.job_url, settings)
+                    if tags:
+                        _store_tags_for_job(body.job_url, tags)
+                threading.Thread(target=_bg_extract, daemon=True).start()
+        except Exception as e:
+            log.warning("Tag extraction setup failed: %s", e)
         return {"ok": True}
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -591,6 +724,207 @@ def hide_job(body: HideRequest):
         raise HTTPException(500, str(e))
 
 
+# ── E1: Application pipeline ──────────────────────────────────────────────────
+
+@app.put("/api/jobs/{job_url:path}/status")
+def update_job_status(job_url: str, body: StatusUpdate):
+    valid = {None, "interested", "applied", "interviewing", "rejected", "offer"}
+    status_val = body.status if body.status and body.status.lower() != "null" else None
+    if status_val not in valid:
+        raise HTTPException(400, f"Invalid status: {body.status}")
+    if not JOBS_DB.exists():
+        raise HTTPException(404, "No jobs database")
+    try:
+        con = sqlite3.connect(JOBS_DB)
+        is_applied = 1 if status_val in ("applied", "interviewing", "offer") else 0
+        con.execute(
+            "UPDATE jobs SET status=?, status_updated_at=?, is_applied=? WHERE job_url=?",
+            (status_val, datetime.now(timezone.utc).isoformat(), is_applied, job_url),
+        )
+        con.commit()
+        con.close()
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/pipeline/stats")
+def pipeline_stats():
+    if not JOBS_DB.exists():
+        return {}
+    try:
+        con = sqlite3.connect(JOBS_DB)
+        rows = con.execute("""
+            SELECT status, COUNT(*) as n,
+                   SUM(CASE WHEN date(status_updated_at) >= date('now', '-7 days') THEN 1 ELSE 0 END) as this_week
+            FROM jobs
+            WHERE status IS NOT NULL
+            GROUP BY status
+        """).fetchall()
+        con.close()
+        return {r[0]: {"total": r[1], "this_week": r[2]} for r in rows}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/jobs")
+def list_jobs(include_all_status: bool = Query(False)):
+    """Return jobs for the pipeline view, optionally including all status values."""
+    if not JOBS_DB.exists():
+        return []
+    try:
+        con = sqlite3.connect(JOBS_DB)
+        con.row_factory = sqlite3.Row
+        if include_all_status:
+            rows = con.execute("""
+                SELECT id, title, employer, location, job_url, suitability_score,
+                       date_posted, is_remote, job_type, user_rating, status, status_updated_at
+                FROM jobs
+                WHERE (hidden = 0 OR hidden IS NULL)
+                  AND status IS NOT NULL
+                ORDER BY status_updated_at DESC
+            """).fetchall()
+        else:
+            rows = con.execute("""
+                SELECT id, title, employer, location, job_url, suitability_score,
+                       date_posted, is_remote, job_type, user_rating, status, status_updated_at
+                FROM jobs
+                WHERE (hidden = 0 OR hidden IS NULL)
+                ORDER BY suitability_score DESC
+                LIMIT 100
+            """).fetchall()
+        con.close()
+        result = []
+        for r in rows:
+            job = dict(r)
+            job["company"] = job.pop("employer", "")
+            job["score"] = job.pop("suitability_score", 0)
+            result.append(job)
+        return result
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ── E2: Dynamic feedback labels ───────────────────────────────────────────────
+
+def _deduplicate_tag(name: str, existing: list[str]) -> str:
+    """Use edit distance to find if tag already exists under a similar name."""
+    try:
+        from rapidfuzz import fuzz
+        for existing_name in existing:
+            if fuzz.ratio(name, existing_name) > 80:
+                return existing_name
+    except ImportError:
+        pass  # rapidfuzz optional
+    return name
+
+
+def extract_tags_from_note(note: str, job_url: str, settings) -> list[str]:
+    """Extract 0-3 tags from a note using cheapest LLM."""
+    if not note or len(note.strip()) < 10:
+        return []
+    existing_tags = _get_all_tags()
+    existing_names = [t["name"] for t in existing_tags]
+    prompt = f"""Extract 0-3 short labels (tags) from this job note.
+Note: "{note}"
+Existing tags (prefer these if they match): {existing_names}
+Rules: tags are 1-4 words, lowercase, hyphenated. Return only a JSON array of strings. Example: ["cold-calling-heavy", "no-base-salary"]
+If the note doesn't warrant any tags, return []."""
+
+    try:
+        resp = _openrouter_call(settings, prompt, timeout=15)
+        tags = json.loads(resp)
+        return [t.lower().replace(" ", "-") for t in tags if isinstance(t, str)][:3]
+    except Exception:
+        return []
+
+
+def _store_tags_for_job(job_url: str, tag_names: list[str]) -> None:
+    """Store extracted tags in DB with deduplication."""
+    if not tag_names or not JOBS_DB.exists():
+        return
+    try:
+        con = sqlite3.connect(JOBS_DB)
+        existing_names = [r[0] for r in con.execute("SELECT name FROM tags").fetchall()]
+        for raw_name in tag_names:
+            name = _deduplicate_tag(raw_name, existing_names)
+            con.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (name,))
+            tag_id = con.execute("SELECT id FROM tags WHERE name=?", (name,)).fetchone()[0]
+            con.execute("INSERT OR IGNORE INTO job_tags (job_url, tag_id) VALUES (?,?)", (job_url, tag_id))
+            con.execute("UPDATE tags SET count = count + 1 WHERE id=? AND NOT EXISTS "
+                        "(SELECT 1 FROM job_tags WHERE job_url=? AND tag_id=?)",
+                        (tag_id, job_url, tag_id))
+            if name not in existing_names:
+                existing_names.append(name)
+        con.commit()
+        con.close()
+    except Exception as e:
+        log.warning("Failed to store tags: %s", e)
+
+
+@app.get("/api/tags")
+def get_tags():
+    """Get all tags with counts."""
+    if not JOBS_DB.exists():
+        return []
+    con = sqlite3.connect(JOBS_DB)
+    con.row_factory = sqlite3.Row
+    tags = con.execute("SELECT * FROM tags ORDER BY count DESC").fetchall()
+    con.close()
+    return [dict(t) for t in tags]
+
+
+@app.post("/api/jobs/{job_url:path}/tags")
+def add_job_tag(job_url: str, body: dict):
+    """Add a tag to a job."""
+    tag_name = body.get("name", "").lower().strip()
+    if not tag_name:
+        raise HTTPException(400, "tag name required")
+    if not JOBS_DB.exists():
+        raise HTTPException(404, "No jobs database")
+    con = sqlite3.connect(JOBS_DB)
+    con.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag_name,))
+    tag_id = con.execute("SELECT id FROM tags WHERE name=?", (tag_name,)).fetchone()[0]
+    already = con.execute("SELECT 1 FROM job_tags WHERE job_url=? AND tag_id=?", (job_url, tag_id)).fetchone()
+    con.execute("INSERT OR IGNORE INTO job_tags (job_url, tag_id) VALUES (?,?)", (job_url, tag_id))
+    if not already:
+        con.execute("UPDATE tags SET count = count + 1 WHERE id=?", (tag_id,))
+    con.commit()
+    con.close()
+    return {"ok": True}
+
+
+@app.delete("/api/jobs/{job_url:path}/tags/{tag_name}")
+def remove_job_tag(job_url: str, tag_name: str):
+    if not JOBS_DB.exists():
+        raise HTTPException(404, "No jobs database")
+    con = sqlite3.connect(JOBS_DB)
+    tag = con.execute("SELECT id FROM tags WHERE name=?", (tag_name,)).fetchone()
+    if tag:
+        deleted = con.execute("DELETE FROM job_tags WHERE job_url=? AND tag_id=?", (job_url, tag[0])).rowcount
+        if deleted:
+            con.execute("UPDATE tags SET count = MAX(0, count - 1) WHERE id=?", (tag[0],))
+    con.commit()
+    con.close()
+    return {"ok": True}
+
+
+@app.get("/api/jobs/{job_url:path}/tags")
+def get_job_tags(job_url: str):
+    """Get tags for a specific job."""
+    if not JOBS_DB.exists():
+        return []
+    con = sqlite3.connect(JOBS_DB)
+    con.row_factory = sqlite3.Row
+    rows = con.execute("""
+        SELECT t.name, t.sentiment FROM job_tags jt
+        JOIN tags t ON t.id = jt.tag_id
+        WHERE jt.job_url = ?
+    """, (job_url,)).fetchall()
+    con.close()
+    return [dict(r) for r in rows]
+
+
 @app.delete("/api/jobs/clear-unsent")
 def clear_unsent_jobs():
     if not JOBS_DB.exists():
@@ -615,6 +949,39 @@ def clear_unsent_jobs():
         con.commit()
         con.close()
         return {"deleted": deleted}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/jobs/filtered")
+def get_filtered_jobs():
+    """Return last 50 gate-rejected jobs with rejection reason (A4 audit trail)."""
+    if not JOBS_DB.exists():
+        return []
+    try:
+        con = sqlite3.connect(JOBS_DB)
+        con.row_factory = sqlite3.Row
+        # filtered_jobs table may not exist in older DBs — create if missing
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS filtered_jobs (
+                job_url TEXT PRIMARY KEY,
+                title TEXT,
+                employer TEXT,
+                location TEXT,
+                site TEXT,
+                reason TEXT,
+                gate_score REAL,
+                discovered_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        rows = con.execute("""
+            SELECT job_url, title, employer, location, site, reason, gate_score, discovered_at
+            FROM filtered_jobs
+            ORDER BY discovered_at DESC
+            LIMIT 50
+        """).fetchall()
+        con.close()
+        return [dict(r) for r in rows]
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -934,6 +1301,145 @@ def revert_insight(index: int):
     history[index]["reverted"] = True
     INSIGHTS_HISTORY.write_text(json.dumps(history, indent=2))
     return {"ok": True, "message": f"Reverted — removed {removed} item(s) from profile."}
+
+@app.post("/api/profile/migrate-from-resume")
+def migrate_from_resume():
+    """One-time LLM call: extract structured experience/projects/skills from resume text blob."""
+    profile = read_profile()
+    resume_text = profile.get("resume", "")
+    if not resume_text:
+        raise HTTPException(400, "No resume text found")
+    settings = get_settings()
+    prompt = (
+        "Extract structured data from this sales professional's resume.\n"
+        "Return a JSON object with:\n"
+        "- experience: array of {title, company, start (YYYY-MM), end (YYYY-MM or \'present\'), description, skills: []}\n"
+        "- projects: array of {name, description, skills: []}\n"
+        "- structured_skills: array of {name, category (crm|methodology|industry|motion|segment|general), "
+        "evidence_level (experience|project|skills_list)}\n\n"
+        f"Resume:\n{resume_text}\n\nReturn only valid JSON, no explanation."
+    )
+    resp = _openrouter_call(settings, prompt, timeout=60)
+    try:
+        data = json.loads(resp)
+        profile["experience"] = data.get("experience", [])
+        profile["projects"] = data.get("projects", [])
+        profile["structured_skills"] = data.get("structured_skills", [])
+        write_profile(profile)
+        return {
+            "migrated": True,
+            "experience_count": len(profile["experience"]),
+            "skills_count": len(profile["structured_skills"]),
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Failed to parse LLM response: {e}")
+
+
+@app.post("/api/profile/regenerate-wiki")
+def regenerate_wiki():
+    """Generate candidate wiki from structured profile fields."""
+    profile = read_profile()
+    settings = get_settings()
+
+    exp_entries = profile.get("experience", [])
+    if exp_entries:
+        exp_text = "\n".join(
+            f"- {e['title']} at {e['company']} ({e.get('start', '')}\u2013{e.get('end', '')}): {e.get('description', '')}"
+            for e in exp_entries
+        )
+    else:
+        exp_text = profile.get("resume", "")[:2000]
+
+    prompt = (
+        "Create a structured candidate wiki in markdown for an LLM to use as context when evaluating job fit.\n\n"
+        f"Candidate info:\n{exp_text}\n\n"
+        f"Projects: {profile.get('projects', [])}\n"
+        f"Skills: {profile.get('structured_skills', [])}\n"
+        f"Description: {profile.get('description', '')}\n\n"
+        "Generate a wiki with exactly these 8 sections:\n"
+        "# Candidate Wiki\n"
+        "## Identity & Target Role\n"
+        "## Quota & Revenue Performance\n"
+        "## CRM & Tools\n"
+        "## Work Experience (chronological)\n"
+        "## Sales Skills & Methodologies\n"
+        "## Client & Deal Types\n"
+        "## Industry Knowledge\n"
+        "## What This Candidate Is NOT\n\n"
+        "Be specific. Include real numbers, real company names, real tools. "
+        "The \'What This Candidate Is NOT\' section should list roles, industries, and contexts "
+        "that don\'t fit this candidate \u2014 this is the most important section for avoiding false positives.\n"
+        "Keep total length under 800 tokens."
+    )
+
+    wiki = _openrouter_call(settings, prompt, timeout=60)
+    profile["wiki"] = wiki
+    profile["wiki_updated_at"] = datetime.now(timezone.utc).isoformat()
+    write_profile(profile)
+    return {"wiki": wiki, "updated_at": profile["wiki_updated_at"]}
+
+
+@app.get("/api/profile/wiki")
+def get_wiki():
+    profile = read_profile()
+    return {"wiki": profile.get("wiki", ""), "updated_at": profile.get("wiki_updated_at")}
+
+
+@app.put("/api/profile/wiki")
+async def save_wiki(request: Request):
+    body = await request.json()
+    profile = read_profile()
+    profile["wiki"] = body.get("wiki", "")
+    profile["wiki_updated_at"] = datetime.now(timezone.utc).isoformat()
+    write_profile(profile)
+    return {"ok": True}
+
+
+@app.post("/api/profile/analyze-resume")
+def analyze_resume():
+    """Analyze resume against recent job patterns, return health score and suggestions."""
+    profile = read_profile()
+    settings = get_settings()
+    if not JOBS_DB.exists():
+        return {"score": 0, "suggestions": ["No jobs scraped yet \u2014 run the scraper first"], "dimensions": {}}
+
+    con = sqlite3.connect(JOBS_DB)
+    con.row_factory = sqlite3.Row
+    rows = con.execute(
+        "SELECT title, description FROM jobs "
+        "WHERE description IS NOT NULL AND description != \'\' "
+        "ORDER BY discovered_at DESC LIMIT 30"
+    ).fetchall()
+    con.close()
+
+    if not rows:
+        return {"score": 0, "suggestions": ["No job descriptions found"], "dimensions": {}}
+
+    jd_sample = "\n---\n".join(
+        f"{r['title']}: {(r['description'] or '')[:300]}" for r in rows[:10]
+    )
+    wiki = profile.get("wiki", "") or profile.get("resume", "")[:1000]
+
+    prompt = (
+        "Analyze this candidate's profile against recent job postings and provide:\n"
+        "1. A resume health score (0-100)\n"
+        "2. 3-5 specific, actionable suggestions to improve their match rate\n"
+        "3. Scores (0-100) for 4 dimensions: keyword_coverage, specificity, recency_signal, seniority_alignment\n\n"
+        f"Recent job postings sample:\n{jd_sample}\n\n"
+        f"Candidate profile:\n{wiki[:800]}\n\n"
+        'Return JSON:\n{"score": 72, "suggestions": ["Add MEDDIC to skills (appears in 8/10 recent jobs)", "..."], '
+        '"dimensions": {"keyword_coverage": 68, "specificity": 65, "recency_signal": 80, "seniority_alignment": 75}}'
+    )
+
+    resp = _openrouter_call(settings, prompt, timeout=60)
+    try:
+        data = json.loads(resp)
+        data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        profile["resume_health"] = data
+        write_profile(profile)
+        return data
+    except Exception:
+        return {"score": 0, "suggestions": ["Analysis failed \u2014 try again"], "dimensions": {}}
 
 
 @app.post("/api/run-scraper")

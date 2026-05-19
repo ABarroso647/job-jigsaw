@@ -1,81 +1,98 @@
- # 🧩 Job Jigsaw
+# Job Jigsaw
 
-  A self-hosted job hunting system that scrapes job boards, scores listings against your profile using an LLM, and sends you a daily email digest. Reply to emails to approve/reject AI-suggested profile updates that improve your search over time.
+Self-hosted job scraping and daily email digest system. Scrapes LinkedIn, Indeed, ATS boards, and RSS feeds. Scores jobs against your profile using DeepSeek + evidence-based matching. Sends a ranked daily digest with Jina semantic re-ranking.
 
-  ## Features
+## Architecture
 
-  - **Scraper** — scrapes Indeed & LinkedIn every 6 hours using your search terms and locations
-  - **AI Scoring** — every job is scored 0–100 against your resume and preferences via OpenRouter
-  - **Daily Digest** — email at 6pm with your top matches, sorted by score
-  - **Profile Editor** — web UI to manage your resume, keywords, boost/penalize weights, and search settings
-  - **AI Insights** — analyzes your liked/disliked jobs and proposes profile updates (new boost keywords, penalize keywords, search terms)
-  - **Email Reply Flow** — approve, reject, or refine proposals by replying to the email. No app needed.
-  - **Insights History** — view and revert past AI-applied profile changes
+```
+Scraper (cron daily)
+  └── python-jobspy → LinkedIn + Indeed
+  └── sources/ats.py → Greenhouse, Lever, Ashby
+  └── sources/rss.py → We Work Remotely, Remotive, Jobicy
+  └── quality_gate.py → filter noise before LLM
+  └── score_job() → DeepSeek scorer
+  └── evidence scoring → replaces entity boost
+  └── jobs.db
 
-  ## Stack
+Notifier (cron daily)
+  └── fetch_unsent_jobs() → staleness filter + score threshold
+  └── rerank_with_jina() → Jina Reranker v3
+  └── build_email_html() → Gmail-safe digest
+  └── reply_parser.py → Gmail IMAP reply hooks
 
-  - Python, FastAPI, SQLite
-  - `python-jobspy` for scraping
-  - OpenRouter for LLM scoring and insights
-  - Gmail (SMTP + IMAP) for email digest and reply flow
-  - Docker + Docker Compose
-  - Designed for self-hosting on a NAS via Dockge
+Profile Editor (always-on FastAPI)
+  └── http://your-ip:3006
+  └── Resume, Wiki, Settings, Preview, History, Pipeline tabs
+```
 
-  ## Setup
+## Services
 
-  ### 1. Clone
+| Service | Path | Port |
+|---|---|---|
+| Profile Editor | `profile-editor/` | 3006 |
+| Scraper | `scraper/` | (cron only) |
+| Notifier | `notifier/` | (cron only) |
 
-  ```bash
-  git clone git@github.com:ABarroso647/job-jigsaw.git
-  cd job-jigsaw
+## Setup
 
-  2. Configure
+### 1. Copy env file
+```bash
+cp .env.example .env
+# Fill in: OPENROUTER_API_KEY, GMAIL_FROM, GMAIL_TO, GMAIL_APP_PASSWORD, JINA_API_KEY
+```
 
-  Copy .env.example to .env and fill in your values:
+### 2. Run with Docker Compose
+```bash
+docker compose up -d
+```
 
-  cp .env.example .env
+### 3. Access profile editor
+Open http://your-machine-ip:3006
 
-  ┌────────────────────┬───────────────────────────────────────────────────────┐
-  │      Variable      │                      Description                      │
-  ├────────────────────┼───────────────────────────────────────────────────────┤
-  │ GMAIL_FROM         │ Gmail address to send from                            │
-  ├────────────────────┼───────────────────────────────────────────────────────┤
-  │ GMAIL_TO           │ Email address to receive digests                      │
-  ├────────────────────┼───────────────────────────────────────────────────────┤
-  │ GMAIL_APP_PASSWORD │ Gmail app password                                    │
-  ├────────────────────┼───────────────────────────────────────────────────────┤
-  │ OPENROUTER_API_KEY │ OpenRouter API key                                    │
-  ├────────────────────┼───────────────────────────────────────────────────────┤
-  │ OPENROUTER_MODEL   │ Model to use (default: meta-llama/llama-3.3-70b:free) │
-  ├────────────────────┼───────────────────────────────────────────────────────┤
-  │ SITE_URL           │ Your NAS URL e.g. http://192.168.1.100:3006           │
-  ├────────────────────┼───────────────────────────────────────────────────────┤
-  │ TELEGRAM_BOT_TOKEN │ (Optional) Telegram bot token                         │
-  ├────────────────────┼───────────────────────────────────────────────────────┤
-  │ TELEGRAM_CHAT_ID   │ (Optional) Telegram chat ID                           │
-  └────────────────────┴───────────────────────────────────────────────────────┘
+## Environment Variables
 
-  3. Run
+| Variable | Required | Description |
+|---|---|---|
+| OPENROUTER_API_KEY | Yes | LLM scoring (DeepSeek via OpenRouter) |
+| OPENROUTER_MODEL | No | Default: `deepseek/deepseek-v4-flash` |
+| GMAIL_FROM | Yes | Gmail address that sends the digest |
+| GMAIL_TO | Yes | Address that receives the digest |
+| GMAIL_APP_PASSWORD | Yes | Gmail App Password (requires 2FA) |
+| JINA_API_KEY | No | Jina Reranker v3 — leave blank to skip re-ranking |
+| SITE_URL | No | Profile editor URL shown in email footer |
+| TELEGRAM_BOT_TOKEN | No | Telegram ping on send |
+| TELEGRAM_CHAT_ID | No | Telegram chat ID |
 
-  docker compose up -d --build
+## Running Tests
 
-  Open the profile editor at http://localhost:3006 and fill in your resume and search settings.
+```bash
+# Unit tests (no API calls)
+pytest tests/unit/ -v
 
-  Usage
+# LLM quality eval tests (makes real API calls, costs ~$0.01)
+pytest tests/eval/ -v
 
-  - Profile Editor at :3006 — set your resume, description, keywords, score threshold, and search terms
-  - Preview tab — see what jobs would be in tonight's email, like/dislike to train the AI
-  - History tab — browse all sent jobs filtered by date, rate and add notes
-  - Insights tab — view and approve/reject pending AI profile update proposals, see history of past changes
+# Frontend tests (requires playwright browsers)
+playwright install chromium
+pytest tests/frontend/ -v
+```
 
-  Email Reply Flow
+## Profile Configuration (profile.yaml)
 
-  When you click AI Insights, a proposal is generated and emailed to you. Reply with:
-  - APPROVE — applies the changes to your profile
-  - REJECT — discards the proposal
-  - Anything else — the AI revises the proposal based on your feedback and replies back
-
-  Updating
-
-  git pull
-  docker compose up -d --build
+Key sections:
+- `resume`: free-text resume blob
+- `experience[]`: structured work history
+- `projects[]`: structured projects
+- `skills[]`: skills with evidence levels
+- `wiki`: LLM-readable candidate knowledge base
+- `search.keywords`: job search terms
+- `search.locations`: search locations
+- `search.allowed_regions`: location pre-filter (null = disabled)
+- `search.require_language`: language pre-filter (null = disabled)
+- `search.ats_companies[]`: ATS companies to scrape directly
+- `notification.score_threshold`: minimum score to include in digest
+- `notification.max_jobs_per_email`: total jobs per digest
+- `notification.linkedin_max_jobs`: LinkedIn budget
+- `notification.indeed_max_jobs`: Indeed budget
+- `scoring.boost[]`: keyword boost list
+- `scoring.penalize[]`: keyword penalize list
