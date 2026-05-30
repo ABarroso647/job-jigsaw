@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sqlite3
 import sys
 import tempfile
@@ -32,10 +33,13 @@ from proposal import (
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 log = logging.getLogger(__name__)
 
-PROFILE_PATH = Path("/data/profile.yaml")
-JOBS_DB = Path("/data/jobs.db")
-SENT_DB = Path("/data/sent_jobs.db")
-INSIGHTS_META = Path("/data/insights_meta.json")
+# Paths default to the Docker /data volume but can be overridden via env vars
+# (used by tests to point at a temp dir / in-memory DB without touching prod data).
+_DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
+PROFILE_PATH = Path(os.environ.get("PROFILE_PATH", _DATA_DIR / "profile.yaml"))
+JOBS_DB = Path(os.environ.get("JOBS_DB", _DATA_DIR / "jobs.db"))
+SENT_DB = Path(os.environ.get("SENT_DB", _DATA_DIR / "sent_jobs.db"))
+INSIGHTS_META = Path(os.environ.get("INSIGHTS_META", _DATA_DIR / "insights_meta.json"))
 
 PAGE_SIZE = 25
 INSIGHTS_AUTO_THRESHOLD = 10  # new ratings/notes since last run triggers auto-update
