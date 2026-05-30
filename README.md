@@ -1,6 +1,6 @@
 # Job Jigsaw
 
-Self-hosted job scraping and daily email digest system. Scrapes LinkedIn, Indeed, ATS boards, and RSS feeds. Scores jobs against your profile using DeepSeek + evidence-based matching. Sends a ranked daily digest with Jina semantic re-ranking.
+Self-hosted job scraping and daily email digest system. Scrapes LinkedIn, Indeed, ATS boards, and RSS feeds. Scores jobs against your profile using DeepSeek (evidence-based matching in progress). Sends a ranked daily digest with Jina semantic re-ranking.
 
 ## Architecture
 
@@ -11,14 +11,14 @@ Scraper (cron daily)
   └── sources/rss.py → We Work Remotely, Remotive, Jobicy
   └── quality_gate.py → filter noise before LLM
   └── score_job() → DeepSeek scorer
-  └── evidence scoring → replaces entity boost
+  └── evidence scoring → replaces entity boost (in progress)
   └── jobs.db
 
 Notifier (cron daily)
   └── fetch_unsent_jobs() → staleness filter + score threshold
   └── rerank_with_jina() → Jina Reranker v3
   └── build_email_html() → Gmail-safe digest
-  └── reply_parser.py → Gmail IMAP reply hooks
+  └── reply_parser.py → Gmail IMAP reply hooks (in progress)
 
 Profile Editor (always-on FastAPI)
   └── http://your-ip:3006

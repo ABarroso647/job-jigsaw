@@ -1,9 +1,0 @@
-{
-  "_description": "Baseline score distribution snapshot. Used by Branch C tests to verify evidence-based scoring improves discrimination vs the entity-boost baseline.",
-  "_captured_at": "2026-05-19",
-  "_branch": "master (pre-Branch-C)",
-  "mean": null,
-  "std_dev": null,
-  "clustering_coefficient": null,
-  "note": "Populate this file by running the scraper against a real profile and capturing score stats before Branch C lands."
-}

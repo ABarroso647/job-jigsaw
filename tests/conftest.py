@@ -10,6 +10,11 @@ for mod in ["jobspy", "fast_langdetect", "config"]:
         sys.modules[mod] = MagicMock()
 
 
+def pytest_configure(config):
+    """Register custom markers so frontend tests don't emit PytestUnknownMarkWarning."""
+    config.addinivalue_line("markers", "playwright: browser tests driven via Playwright")
+
+
 SAMPLE_PROFILE = {
     "resume": "Account Executive with 3 years SaaS sales experience...",
     "description": "Experienced AE seeking SaaS roles in Ontario",
