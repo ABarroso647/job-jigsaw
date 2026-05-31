@@ -84,16 +84,6 @@ def _import_main():
     return sys.modules["main"]
 
 
-# Columns the editor's real `_init_jobs_db()` creates, in schema order. Kept here
-# only so `seed_jobs` knows which keys are insertable; the table itself is always
-# built by main._init_jobs_db(), never from this list.
-_JOBS_COLUMNS = (
-    "id", "title", "employer", "location", "job_url", "suitability_score",
-    "suitability_reason", "date_posted", "is_remote", "job_type",
-    "discovered_at", "user_rating", "notes", "hidden", "is_applied",
-)
-
-
 @pytest.fixture
 def in_memory_db(tmp_path, monkeypatch):
     """A sqlite3 connection to a jobs DB built by the editor's REAL init path.
@@ -122,12 +112,15 @@ def seed_jobs(data_dir, jobs):
     For the behavioral frontend tests (rating / preview-exclusion) that need a
     populated jobs.db inside a temp DATA_DIR. Schema knowledge lives in ONE place:
     this points main.JOBS_DB at `data_dir/jobs.db`, calls main._init_jobs_db() to
-    create the table, then INSERT OR IGNOREs each job using only columns that
-    exist in the real editor schema. Omitted keys get sensible defaults; a UUID
-    `id` is generated when absent.
+    create the table, then INSERT OR IGNOREs each job. The insertable columns are
+    read from the live table via PRAGMA — NOT hard-coded — so this helper never
+    needs editing when the jobs schema changes (the schema-parity test in
+    tests/unit/ is the single intentional touch-point for that). Caller keys that
+    aren't real columns are dropped; a UUID `id`, and `hidden`/`is_applied` = 0,
+    are filled in when those columns exist and the caller omitted them.
 
     `data_dir` is a Path (a temp DATA_DIR like the live_app fixture uses) and
-    `jobs` is a list of dicts keyed by editor-schema column names.
+    `jobs` is a list of dicts keyed by jobs-table column names.
     """
     main = _import_main()
 
@@ -137,26 +130,20 @@ def seed_jobs(data_dir, jobs):
 
     con = sqlite3.connect(db_path)
     try:
+        # Reflect whatever _init_jobs_db() just created — the live schema.
+        valid_cols = {r[1] for r in con.execute("PRAGMA table_info(jobs)")}
         for job in jobs:
-            row = {
-                "id": job.get("id") or str(uuid.uuid4()),
-                "title": job.get("title"),
-                "employer": job.get("employer"),
-                "location": job.get("location"),
-                "job_url": job.get("job_url"),
-                "suitability_score": job.get("suitability_score"),
-                "suitability_reason": job.get("suitability_reason"),
-                "date_posted": job.get("date_posted"),
-                "is_remote": job.get("is_remote"),
-                "job_type": job.get("job_type"),
-                "discovered_at": job.get("discovered_at"),
-                "user_rating": job.get("user_rating"),
-                "notes": job.get("notes"),
-                "hidden": job.get("hidden", 0),
-                "is_applied": job.get("is_applied", 0),
-            }
-            cols = ", ".join(row.keys())
-            placeholders = ", ".join(f":{k}" for k in row.keys())
+            row = {k: v for k, v in job.items() if k in valid_cols}
+            # Sensible defaults, applied only for columns the table actually has.
+            if "id" in valid_cols and not row.get("id"):
+                row["id"] = str(uuid.uuid4())
+            for col, default in (("hidden", 0), ("is_applied", 0)):
+                if col in valid_cols and col not in row:
+                    row[col] = default
+            if not row:
+                continue
+            cols = ", ".join(row)
+            placeholders = ", ".join(f":{k}" for k in row)
             con.execute(
                 f"INSERT OR IGNORE INTO jobs ({cols}) VALUES ({placeholders})", row
             )
