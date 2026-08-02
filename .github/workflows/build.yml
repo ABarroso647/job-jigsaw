@@ -3,6 +3,8 @@ name: Build and push images
 on:
   push:
     branches: [master, main]
+  pull_request:
+    branches: [master, main]
   workflow_dispatch:
 
 permissions:
@@ -10,7 +12,54 @@ permissions:
   packages: write
 
 jobs:
+  # ── Gating: unit/integration suite (no network, no browser) ────────────────
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.13
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install deps (frozen lockfile + test extras)
+        working-directory: profile-editor
+        run: uv sync --frozen --extra test --python 3.13
+
+      - name: Run non-frontend suite
+        run: profile-editor/.venv/bin/python -m pytest tests/ --ignore=tests/frontend -q
+
+  # ── Gating: browser suite (needs Playwright + a live uvicorn app) ───────────
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.13
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install deps (frozen lockfile + test extras)
+        working-directory: profile-editor
+        run: uv sync --frozen --extra test --python 3.13
+
+      # conftest_frontend spawns `python -m uvicorn main:app` as a subprocess with
+      # cwd=profile-editor — make `python` resolve to the venv that has every dep.
+      - name: Put venv on PATH for subprocesses
+        run: echo "$GITHUB_WORKSPACE/profile-editor/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Install Playwright browser (chromium)
+        run: profile-editor/.venv/bin/python -m playwright install --with-deps chromium
+
+      - name: Run frontend suite
+        run: profile-editor/.venv/bin/python -m pytest tests/frontend -q
+
+  # ── Build & push images: only on push to a default branch, gated by tests ───
   build:
+    needs: [test, frontend]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
