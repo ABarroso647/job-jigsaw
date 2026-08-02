@@ -156,7 +156,7 @@
       border-radius: 20px; padding: 4px 12px;
       font-size: 13px; margin: 4px; cursor: pointer;
     }
-    .keyword-chip.selected { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .keyword-chip:has(input:checked) { background: #2563eb; border-color: #2563eb; color: #fff; }
     .keyword-chip input[type=checkbox] { display: none; }
 
     /* job-card badges — static, non-interactive (own class so they never share
@@ -938,19 +938,18 @@ async function uploadResume(input) {
 }
 
 // ── Analyse ───────────────────────────────────────────────────────────────────
-// Build one selectable keyword chip as a real DOM node, wired at creation. The
-// caller holds the input it just made, so nothing ever re-queries the document
-// for `.keyword-chip` (which also matches input-less job-card badge spans) and
-// no `input` can be null. `weight` is optional (title chips have none).
+// Build one selectable keyword chip as a DOM node. The caller keeps the input it
+// created, so chips are never re-queried globally and `input` is never null.
+// `weight` is optional (title chips have none); CSS `:has(input:checked)` renders
+// the selected state, so there's no class to keep in sync.
 function makeAnalyseChip({ value, weight }) {
   const label = document.createElement('label');
-  label.className = 'keyword-chip selected';
+  label.className = 'keyword-chip';
   const input = document.createElement('input');
   input.type = 'checkbox';
   input.value = value;
   input.checked = true;
   if (weight != null) input.dataset.weight = weight;
-  input.addEventListener('change', () => label.classList.toggle('selected', input.checked));
   label.appendChild(input);
   label.appendChild(document.createTextNode(value));
   if (weight != null) {
