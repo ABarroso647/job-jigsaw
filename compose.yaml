@@ -1,6 +1,7 @@
 services:
   scraper:
     image: ghcr.io/abarroso647/job-jigsaw-scraper:latest
+    pull_policy: always
     container_name: scraper
     restart: unless-stopped
     volumes:
@@ -12,6 +13,7 @@ services:
 
   notifier:
     image: ghcr.io/abarroso647/job-jigsaw-notifier:latest
+    pull_policy: always
     container_name: notifier
     restart: unless-stopped
     volumes:
@@ -25,6 +27,7 @@ services:
 
   profile-editor:
     image: ghcr.io/abarroso647/job-jigsaw-profile-editor:latest
+    pull_policy: always
     container_name: profile-editor
     restart: unless-stopped
     ports:

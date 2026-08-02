@@ -2,6 +2,10 @@
 .env
 .env.local
 
+# Local Tracked files
+.claude
+.handoff
+
 # Runtime data — contains personal info and secrets
 data/*
 

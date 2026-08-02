@@ -54,10 +54,10 @@ def test_language_french_filtered():
     text = "Gestionnaire des comptes commerciaux Ventes et développement des affaires"
     assert language_ok(text, "en") is False
 
-def test_language_detection_error_allows_through():
+def test_language_detection_error_skips_job():
     import sys
     sys.modules["fast_langdetect"].detect.side_effect = Exception("model not found")
-    assert language_ok("some text", "en") is True
+    assert language_ok("some text", "en") is False
     sys.modules["fast_langdetect"].detect.side_effect = None
 
 

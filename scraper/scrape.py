@@ -134,8 +134,8 @@ def language_ok(text: str, require_language: str | None) -> bool:
         detected = (result.get("lang") or result.get("language") or "").lower()
         return detected == require_language.lower()
     except Exception as e:
-        log.warning("Language detection failed: %s — allowing job through", e)
-        return True
+        log.warning("Language detection failed: %s — skipping job", e)
+        return False
 
 
 # ── Entity boost ──────────────────────────────────────────────────────────────
