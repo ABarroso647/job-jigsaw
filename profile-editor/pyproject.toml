@@ -4,6 +4,8 @@ version = "0.1.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "fastapi>=0.115.5",
+    "geopy>=2.4",
+    "timezonefinder>=6.5",
     "uvicorn>=0.32.1",
     "pyyaml>=6.0.2",
     "requests>=2.32.3",

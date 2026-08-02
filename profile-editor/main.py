@@ -1,5 +1,5 @@
 """Job Jigsaw — Profile Editor API"""
-
+from __future__ import annotations
 import json
 import logging
 import os
@@ -10,11 +10,18 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
-
+from typing import Final, TYPE_CHECKING
 import requests
 import yaml
 import mammoth
 import pymupdf4llm
+
+if TYPE_CHECKING:
+    # Heavy geo deps (geopy pulls nothing heavy, but timezonefinder pulls numpy +
+    # ~30MB polygons). Imported lazily inside _get_geocoder/_get_tzf so that
+    # `import main` stays cheap and doesn't drag numpy into test collection.
+    from geopy.geocoders import Nominatim
+    from timezonefinder import TimezoneFinder
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -35,25 +42,49 @@ log = logging.getLogger(__name__)
 
 # Paths default to the Docker /data volume but can be overridden via env vars
 # (used by tests to point at a temp dir / in-memory DB without touching prod data).
-_DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
-PROFILE_PATH = Path(os.environ.get("PROFILE_PATH", _DATA_DIR / "profile.yaml"))
-JOBS_DB = Path(os.environ.get("JOBS_DB", _DATA_DIR / "jobs.db"))
-SENT_DB = Path(os.environ.get("SENT_DB", _DATA_DIR / "sent_jobs.db"))
-INSIGHTS_META = Path(os.environ.get("INSIGHTS_META", _DATA_DIR / "insights_meta.json"))
+_DATA_DIR: Final[Path] = Path(os.environ.get("DATA_DIR", "/data"))
+PROFILE_PATH: Final[Path] = Path(os.environ.get("PROFILE_PATH", _DATA_DIR / "profile.yaml"))
+JOBS_DB: Final[Path] = Path(os.environ.get("JOBS_DB", _DATA_DIR / "jobs.db"))
+SENT_DB: Final[Path] = Path(os.environ.get("SENT_DB", _DATA_DIR / "sent_jobs.db"))
+INSIGHTS_META: Final[Path] = Path(os.environ.get("INSIGHTS_META", _DATA_DIR / "insights_meta.json"))
 
-PAGE_SIZE = 25
-INSIGHTS_AUTO_THRESHOLD = 10  # new ratings/notes since last run triggers auto-update
-SCRAPER_URL = "http://scraper:3007"
-SCRAPER_REQUEST_TIMEOUT = 5
+PAGE_SIZE: Final[int] = 25
+INSIGHTS_AUTO_THRESHOLD: Final[int] = 10  # new ratings/notes since last run triggers auto-update
+SCRAPER_URL: Final[str] = "http://scraper:3007"
+SCRAPER_REQUEST_TIMEOUT: Final[int] = 5
 
-SORT_MAP = {
+# Geocoder + timezone resolver (lazy: importing main must stay cheap, and
+# timezonefinder pulls numpy + ~30MB of polygons). Built on first use.
+# Nominatim/TimezoneFinder are TYPE_CHECKING-only (heavy), so annotations rely
+# on `from __future__ import annotations` to resolve lazily.
+_geocoder: Nominatim | None = None
+_tzf: TimezoneFinder | None = None
+
+
+def _get_geocoder() -> Nominatim:
+    global _geocoder
+    if _geocoder is None:
+        from geopy.geocoders import Nominatim
+        _geocoder = Nominatim(user_agent="job-jigsaw")
+    return _geocoder
+
+
+def _get_tzf() -> TimezoneFinder:
+    global _tzf
+    if _tzf is None:
+        from timezonefinder import TimezoneFinder
+        _tzf = TimezoneFinder()
+    return _tzf
+
+
+SORT_MAP: Final[dict[str, str]] = {
     "score":      "suitability_score DESC, discovered_at DESC",
     "posted":     "date_posted DESC, discovered_at DESC",
     "discovered": "discovered_at DESC",
 }
 
 
-DEFAULT_PROFILE = {
+DEFAULT_PROFILE: Final[dict] = {
     "resume": "",
     "description": "",
     "search": {
@@ -154,9 +185,9 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Job Jigsaw Profile Editor", lifespan=lifespan)
+app: Final[FastAPI] = FastAPI(title="Job Jigsaw Profile Editor", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+templates: Final[Jinja2Templates] = Jinja2Templates(directory="templates")
 
 
 # ── Profile helpers ───────────────────────────────────────────────────────────
@@ -169,6 +200,30 @@ def read_profile() -> dict:
 def write_profile(data: dict) -> None:
     with open(PROFILE_PATH, "w") as f:
         yaml.dump(data, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
+
+
+class ResolvedLocation(BaseModel):
+    name: str
+    lat: float
+    lon: float
+    timezone: str | None = None
+
+
+def _resolve_location(text: str) -> ResolvedLocation | None:
+    """Geocode free text -> canonical name, lat, lon, IANA tz. None if unresolvable."""
+    try:
+        loc = _get_geocoder().geocode(text, timeout=10)
+        if not loc:
+            return None
+        return ResolvedLocation(
+            name=loc.address,
+            lat=loc.latitude,
+            lon=loc.longitude,
+            timezone=_get_tzf().timezone_at(lat=loc.latitude, lng=loc.longitude),
+        )
+    except Exception as e:
+        log.warning("geocode failed for %r: %s", text, e)
+        return None
 
 
 def _sent_map() -> dict[str, str]:
@@ -184,7 +239,7 @@ def _sent_map() -> dict[str, str]:
         return {}
 
 
-STALE_DATE_POSTED_DAYS = 14
+STALE_DATE_POSTED_DAYS: Final[int] = 14
 
 def query_jobs(threshold: int, max_jobs: int, max_job_age_days: int = 7) -> list[dict]:
     if not JOBS_DB.exists():
@@ -339,6 +394,15 @@ def get_profile() -> dict:
 async def save_profile(request: Request):
     try:
         data = await request.json()
+        locations = (data.get("search") or {}).get("locations") or []
+        if locations:
+            resolved = _resolve_location(locations[0])
+            if resolved:
+                data["search"]["locations"][0] = resolved.name
+                data["search"]["lat"] = resolved.lat
+                data["search"]["lon"] = resolved.lon
+                if resolved.timezone:
+                    data.setdefault("notification", {})["timezone"] = resolved.timezone
         write_profile(data)
         return {"ok": True}
     except Exception as e:
