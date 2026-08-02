@@ -32,7 +32,7 @@ MAX_RETRY_ATTEMPTS = 3
 BASE_RETRY_WAIT = 5          # seconds; actual wait = BASE_RETRY_WAIT * (2 ** attempt)
 JOB_DESCRIPTION_MAX_CHARS = 3000
 RATE_LIMIT_STATUS_CODES = (429, 502, 503)
-JOB_BOARDS = ["indeed", "linkedin"]
+JOB_BOARDS = ["linkedin"]
 INDEED_COUNTRY = "Canada"
 DEEP_RESULTS_PER_SITE = 50
 OPENROUTER_TIMEOUT = 60      # seconds
