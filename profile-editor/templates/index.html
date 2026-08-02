@@ -159,6 +159,16 @@
     .keyword-chip.selected { background: #2563eb; border-color: #2563eb; color: #fff; }
     .keyword-chip input[type=checkbox] { display: none; }
 
+    /* job-card badges — static, non-interactive (own class so they never share
+       the interactive `.keyword-chip` identity that assumes a nested <input>) */
+    .job-badge {
+      display: inline-flex; align-items: center;
+      background: #eff6ff; border: 1px solid #bfdbfe;
+      border-radius: 20px; padding: 4px 12px;
+      font-size: 13px; margin: 4px;
+    }
+    .job-badge.job-badge-accent { background: #2563eb; border-color: #2563eb; color: #fff; }
+
     /* tip list */
     .tip-list { list-style: none; padding: 0; margin-top: 12px; }
     .tip-list li {
@@ -928,6 +938,36 @@ async function uploadResume(input) {
 }
 
 // ── Analyse ───────────────────────────────────────────────────────────────────
+// Build one selectable keyword chip as a real DOM node, wired at creation. The
+// caller holds the input it just made, so nothing ever re-queries the document
+// for `.keyword-chip` (which also matches input-less job-card badge spans) and
+// no `input` can be null. `weight` is optional (title chips have none).
+function makeAnalyseChip({ value, weight }) {
+  const label = document.createElement('label');
+  label.className = 'keyword-chip selected';
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.value = value;
+  input.checked = true;
+  if (weight != null) input.dataset.weight = weight;
+  input.addEventListener('change', () => label.classList.toggle('selected', input.checked));
+  label.appendChild(input);
+  label.appendChild(document.createTextNode(value));
+  if (weight != null) {
+    const w = document.createElement('span');
+    w.style.opacity = '.6';
+    w.textContent = ` ${weight >= 0 ? '+' : ''}${weight}`;
+    label.appendChild(w);
+  }
+  return label;
+}
+
+// Render selectable chips into a container, replacing prior contents. Scoped to
+// the nodes it creates — never a global `.keyword-chip` sweep.
+function renderAnalyseChips(containerId, items) {
+  document.getElementById(containerId).replaceChildren(...items.map(makeAnalyseChip));
+}
+
 async function runAnalyse() {
   const spinner = document.getElementById('analyse-spinner');
   spinner.style.display = 'inline-block';
@@ -937,24 +977,9 @@ async function runAnalyse() {
       resume: document.getElementById('resume').value,
       description: document.getElementById('description').value,
     });
-    document.getElementById('title-chips').innerHTML =
-      analyseData.titles.map(t =>
-        `<label class="keyword-chip"><input type="checkbox" value="${escHtml(t)}">${escHtml(t)}</label>`
-      ).join('');
-    document.getElementById('boost-chips').innerHTML =
-      analyseData.boost.map(k =>
-        `<label class="keyword-chip"><input type="checkbox" value="${escHtml(k.keyword)}" data-weight="${k.weight}">${escHtml(k.keyword)} <span style="opacity:.6">+${k.weight}</span></label>`
-      ).join('');
-    document.getElementById('penalize-chips').innerHTML =
-      analyseData.penalize.map(k =>
-        `<label class="keyword-chip"><input type="checkbox" value="${escHtml(k.keyword)}" data-weight="${k.weight}">${escHtml(k.keyword)} <span style="opacity:.6">${k.weight}</span></label>`
-      ).join('');
-    document.querySelectorAll('.keyword-chip').forEach(c => {
-      const input = c.querySelector('input');
-      input.checked = true;
-      c.classList.add('selected');
-      input.addEventListener('change', () => c.classList.toggle('selected', input.checked));
-    });
+    renderAnalyseChips('title-chips',    analyseData.titles.map(t => ({ value: t })));
+    renderAnalyseChips('boost-chips',    analyseData.boost.map(k => ({ value: k.keyword, weight: k.weight })));
+    renderAnalyseChips('penalize-chips', analyseData.penalize.map(k => ({ value: k.keyword, weight: k.weight })));
     document.getElementById('analyse-results').style.display = 'block';
   } catch (e) { alert('Analyse failed: ' + e.message); }
   finally { spinner.style.display = 'none'; }
@@ -1045,8 +1070,8 @@ function renderJobs(jobs) {
     const score = j.score || 0;
     const scoreClass = score >= 70 ? 'score-green' : 'score-yellow';
     const badges = [
-      j.is_remote ? '<span class="keyword-chip selected" style="cursor:default;">Remote</span>' : '',
-      j.job_type  ? `<span class="keyword-chip" style="cursor:default;">${j.job_type.replace(/_/g,' ')}</span>` : '',
+      j.is_remote ? '<span class="job-badge job-badge-accent">Remote</span>' : '',
+      j.job_type  ? `<span class="job-badge">${j.job_type.replace(/_/g,' ')}</span>` : '',
     ].join('');
     return `<div class="job-card" data-url="${escHtml(j.job_url)}">
       <div><span class="score-badge ${scoreClass}">${score}/100</span>${badges}</div>
